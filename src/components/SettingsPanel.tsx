@@ -19,13 +19,14 @@ const PROVIDERS: { id: ApiKeyProvider; label: string }[] = [
 ];
 
 export function SettingsPanel() {
-  const { configured, status, setView, refreshConfigured, saveKey } =
+  const { configured, status, lockSettings, refreshConfigured, saveKey } =
     useSettingsStore();
   const { logs, refreshLogs } = useCostStore();
   const { themeId, setTheme } = useThemeStore();
   const [provider, setProvider] = useState<ApiKeyProvider>("gemini");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [bioBusy, setBioBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState<"appearance" | "keys" | "usage">(
     "appearance",
@@ -35,6 +36,8 @@ export function SettingsPanel() {
   const [bioMsg, setBioMsg] = useState<string | null>(null);
 
   useEffect(() => {
+    // Do NOT re-check/kick on mount — that raced with unlock and ejected
+    // users right after a successful fingerprint.
     void refreshConfigured();
     void refreshLogs();
     void getBiometricStatus()
@@ -45,6 +48,9 @@ export function SettingsPanel() {
           platform: "web",
           label: "Biometrics",
           message: "Unavailable in browser preview",
+          biometricsAvailable: false,
+          passwordAvailable: false,
+          vaultLabel: "OS secure storage",
         }),
       );
   }, [refreshConfigured, refreshLogs]);
@@ -124,7 +130,7 @@ export function SettingsPanel() {
           ))}
           <button
             type="button"
-            onClick={() => setView("chat")}
+            onClick={() => lockSettings()}
             className="rounded border border-[var(--vigil-border)] px-3 py-1.5 text-sm"
           >
             Back to IDE
@@ -192,10 +198,11 @@ export function SettingsPanel() {
           <div className="rounded border border-[var(--vigil-border)] p-3">
             <label className="flex items-center justify-between gap-3 text-sm">
               <span>
-                Use {bioStatus?.label ?? "Touch ID / Face ID"} for API keys
+                Use {bioStatus?.label ?? "Biometrics"} before key access
                 <div className="text-xs text-[var(--vigil-muted)]">
-                  {bioStatus?.message ??
-                    "Prompt biometrics before save/read from Keychain"}
+                  Layer 1: device auth · Layer 2:{" "}
+                  {bioStatus?.vaultLabel ?? "OS secure storage"}
+                  {bioStatus?.message ? ` — ${bioStatus.message}` : ""}
                 </div>
               </span>
               <input
@@ -209,19 +216,42 @@ export function SettingsPanel() {
             </label>
             <button
               type="button"
-              className="mt-2 rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs"
+              className="mt-2 rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs disabled:opacity-50"
+              disabled={bioBusy}
               onClick={() => {
+                setError(null);
+                setBioMsg("Waiting for authentication…");
+                setBioBusy(true);
                 void testBiometric("Unlock Vigil AI Agent")
-                  .then((ok) =>
-                    setBioMsg(ok ? "Biometric OK" : "Cancelled / failed"),
+                  .then((result) =>
+                    setBioMsg(
+                      result.authenticated === true
+                        ? "Biometrics OK — native dialog completed successfully."
+                        : `Biometrics denied (${result.detail}).`,
+                    ),
                   )
-                  .catch((err) => setBioMsg(String(err)));
+                  .catch((err) => {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    setBioMsg(`Biometrics error: ${msg}`);
+                    setError(msg);
+                  })
+                  .finally(() => setBioBusy(false));
               }}
             >
-              Test biometric
+              {bioBusy ? "Waiting…" : "Test biometric"}
             </button>
             {bioMsg && (
-              <p className="mt-2 text-xs text-[var(--vigil-muted)]">{bioMsg}</p>
+              <p
+                className={`mt-2 text-xs ${
+                  bioMsg.startsWith("Biometrics error")
+                    ? "text-[var(--vigil-danger)]"
+                    : bioMsg.startsWith("Biometrics OK")
+                      ? "text-[var(--vigil-success)]"
+                      : "text-[var(--vigil-muted)]"
+                }`}
+              >
+                {bioMsg}
+              </p>
             )}
           </div>
 

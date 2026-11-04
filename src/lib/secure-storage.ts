@@ -62,6 +62,15 @@ export async function saveApiKey(
   provider: ApiKeyProvider,
   apiKey: string,
 ): Promise<void> {
+  // If Settings was already unlocked with Touch ID, do NOT prompt again —
+  // a second Keychain/password dialog is what felt like "login after fingerprint".
+  const gateOpen = await isSettingsGateOpen().catch(() => false);
+  if (gateOpen) {
+    await invoke("save_api_key", { provider, apiKey });
+    resetBiometricFail();
+    return;
+  }
+
   const require = shouldRequireBiometric();
   try {
     await invoke("save_api_key_with_biometric", {
@@ -82,6 +91,19 @@ export async function saveApiKey(
   }
 }
 
+export async function isSettingsGateOpen(): Promise<boolean> {
+  return invoke<boolean>("settings_gate_open");
+}
+
+export async function lockSettingsGate(): Promise<void> {
+  await invoke("lock_settings_gate");
+}
+
+/** Call only after Touch ID authenticated === true. */
+export async function unlockSettingsGate(): Promise<void> {
+  await invoke("unlock_settings_gate");
+}
+
 export async function hasApiKey(provider: ApiKeyProvider): Promise<boolean> {
   return invoke<boolean>("has_api_key", { provider });
 }
@@ -90,8 +112,18 @@ export async function deleteApiKey(provider: ApiKeyProvider): Promise<void> {
   await invoke("delete_api_key", { provider });
 }
 
-/** Read API key from OS Keychain via Rust (biometric when enabled). */
+/**
+ * Read API key from OS vault (Layer 2).
+ * Layer 1 presence prompt is skipped when Settings gate is already open.
+ */
 export async function getApiKey(provider: ApiKeyProvider): Promise<string> {
+  const gateOpen = await isSettingsGateOpen().catch(() => false);
+  if (gateOpen) {
+    const key = await invoke<string>("get_api_key", { provider });
+    resetBiometricFail();
+    return key;
+  }
+
   const require = shouldRequireBiometric();
   try {
     const key = await invoke<string>("get_api_key_with_biometric", {
@@ -120,16 +152,96 @@ export interface BiometricStatus {
   platform: string;
   label: string;
   message: string;
+  /** Biometric prompt available on this OS/device. */
+  biometricsAvailable?: boolean;
+  /** Typed device password verification available. */
+  passwordAvailable?: boolean;
+  /** OS secure vault label (Keychain / Credential Manager / Secret Service). */
+  vaultLabel?: string;
 }
 
 export async function getBiometricStatus(): Promise<BiometricStatus> {
   return invoke<BiometricStatus>("biometric_status");
 }
 
+export interface BiometricAuthResult {
+  authenticated: boolean;
+  detail: string;
+}
+
+export type AuthMode = "biometrics" | "password";
+
+/**
+ * Returns authenticated===true ONLY after native auth success.
+ * mode: "biometrics" (native prompt). Prefer verifyDevicePassword() for typed passwords.
+ */
 export async function testBiometric(
   reason = "Unlock Vigil AI Agent",
-): Promise<boolean> {
-  return invoke<boolean>("authenticate_biometric", { reason });
+  mode: AuthMode = "biometrics",
+  openSettingsGate = false,
+): Promise<BiometricAuthResult> {
+  try {
+    const result = await invoke<BiometricAuthResult>("authenticate_biometric", {
+      reason,
+      mode,
+      openSettingsGate,
+    });
+    if (
+      !result ||
+      typeof result !== "object" ||
+      result.authenticated !== true
+    ) {
+      return {
+        authenticated: false,
+        detail:
+          result && typeof result === "object" && "detail" in result
+            ? String((result as BiometricAuthResult).detail || "denied")
+            : "denied",
+      };
+    }
+    return { authenticated: true, detail: result.detail || "ok" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      msg.includes("authenticate_biometric")
+        ? msg
+        : `Auth invoke failed: ${msg}`,
+    );
+  }
+}
+
+/** Verify a typed device login password (in-app form). No biometric prompt. */
+export async function verifyDevicePassword(
+  password: string,
+  openSettingsGate = false,
+): Promise<BiometricAuthResult> {
+  try {
+    const result = await invoke<BiometricAuthResult>("verify_device_password", {
+      password,
+      openSettingsGate,
+    });
+    if (
+      !result ||
+      typeof result !== "object" ||
+      result.authenticated !== true
+    ) {
+      return {
+        authenticated: false,
+        detail:
+          result && typeof result === "object" && "detail" in result
+            ? String((result as BiometricAuthResult).detail || "denied")
+            : "denied",
+      };
+    }
+    return { authenticated: true, detail: result.detail || "ok" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      msg.includes("verify_device_password")
+        ? msg
+        : `Password verify failed: ${msg}`,
+    );
+  }
 }
 
 /** Opaque session bootstrap from Rust. */

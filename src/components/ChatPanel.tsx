@@ -43,7 +43,7 @@ interface SpeechRecognitionEvent extends Event {
 export function ChatPanel() {
   const preferredProvider = useChatStore((s) => s.preferredProvider);
   const setPreferredProvider = useChatStore((s) => s.setPreferredProvider);
-  const setView = useSettingsStore((s) => s.setView);
+  const openSettingsGate = useSettingsStore((s) => s.openSettingsGate);
   const showAgentDiff = useEditorTabsStore((s) => s.showAgentDiff);
   const appendOutput = useTerminalStore((s) => s.appendOutput);
   const {
@@ -299,7 +299,12 @@ export function ChatPanel() {
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic</option>
           </select>
-          <button type="button" onClick={() => setView("settings")} className="hover:text-[var(--vigil-text)]">
+          <button
+            type="button"
+            onClick={() => openSettingsGate()}
+            className="hover:text-[var(--vigil-text)]"
+            title="Unlock Settings"
+          >
             Settings
           </button>
         </div>

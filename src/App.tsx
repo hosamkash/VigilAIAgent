@@ -7,6 +7,7 @@ import { EditorGroup } from "./components/layout/EditorGroup";
 import { BottomPanel } from "./components/layout/BottomPanel";
 import { ChatPanel } from "./components/ChatPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsUnlockScreen } from "./components/SettingsUnlockScreen";
 import { useSettingsStore } from "./store/settingsStore";
 import { useLayoutStore } from "./store/layoutStore";
 import { useCostStore } from "./store/costStore";
@@ -137,6 +138,7 @@ function IdeShell() {
 
 function App() {
   const view = useSettingsStore((s) => s.view);
+  const settingsUnlocked = useSettingsStore((s) => s.settingsUnlocked);
   const refreshLogs = useCostStore((s) => s.refreshLogs);
   const initLayout = useLayoutStore((s) => s.initLayout);
 
@@ -145,8 +147,13 @@ function App() {
     void refreshLogs();
   }, [refreshLogs, initLayout]);
 
-  if (view === "settings") {
+  // Hard gate: Settings panel only if unlocked after successful auth.
+  if (view === "settings" && settingsUnlocked === true) {
     return <SettingsPanel />;
+  }
+
+  if (view === "settings-locked" || view === "settings") {
+    return <SettingsUnlockScreen />;
   }
 
   return <IdeShell />;

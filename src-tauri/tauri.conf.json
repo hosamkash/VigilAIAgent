@@ -33,7 +33,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": []
+    "resources": [
+      "resources/authenticate.swift",
+      "resources/verify_password.swift"
+    ],
+    "externalBin": [],
+    "macOS": {
+      "infoPlist": "Info.plist",
+      "minimumSystemVersion": "12.0"
+    }
   },
   "plugins": {
     "sql": {

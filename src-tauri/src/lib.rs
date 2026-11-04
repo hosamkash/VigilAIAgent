@@ -10,9 +10,11 @@ use keyring::Entry;
 use rand::RngCore;
 use serde::Serialize;
 use sha2::Sha256;
+use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{Manager, State};
@@ -21,6 +23,9 @@ type HmacSha256 = Hmac<Sha256>;
 
 const KEYRING_SERVICE: &str = "com.vigil.agent";
 const SIDECAR_PORT: u16 = 47821;
+
+/// Set ONLY after Touch ID succeeds for Settings. Cleared on lock/deny.
+static SETTINGS_GATE_OPEN: AtomicBool = AtomicBool::new(false);
 
 struct LaunchSecret {
     session_id: String,
@@ -74,6 +79,70 @@ fn validate_provider(provider: &str) -> Result<(), VigilError> {
     }
 }
 
+/// Non-secret metadata path — listing configured providers must NOT touch the OS vault
+/// (avoids a second password/keychain dialog right after Settings unlock).
+fn app_support_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        return PathBuf::from(home)
+            .join("Library/Application Support")
+            .join("com.vigil.agent");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+        return PathBuf::from(base).join("com.vigil.agent");
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let base = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            format!("{home}/.config")
+        });
+        return PathBuf::from(base).join("com.vigil.agent");
+    }
+}
+
+fn configured_meta_path() -> PathBuf {
+    app_support_dir().join("configured_providers.json")
+}
+
+fn read_configured_meta() -> Vec<String> {
+    let path = configured_meta_path();
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
+}
+
+fn write_configured_meta(providers: &[String]) -> Result<(), VigilError> {
+    let path = configured_meta_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| VigilError::Message(e.to_string()))?;
+    }
+    let raw = serde_json::to_string_pretty(providers)
+        .map_err(|e| VigilError::Message(e.to_string()))?;
+    fs::write(&path, raw).map_err(|e| VigilError::Message(e.to_string()))
+}
+
+fn mark_provider_configured(provider: &str) -> Result<(), VigilError> {
+    let mut list = read_configured_meta();
+    if !list.iter().any(|p| p == provider) {
+        list.push(provider.to_string());
+        write_configured_meta(&list)?;
+    }
+    Ok(())
+}
+
+fn unmark_provider_configured(provider: &str) -> Result<(), VigilError> {
+    let list: Vec<String> = read_configured_meta()
+        .into_iter()
+        .filter(|p| p != provider)
+        .collect();
+    write_configured_meta(&list)
+}
+
 fn read_keyring(provider: &str) -> Result<String, VigilError> {
     validate_provider(provider)?;
     let entry = Entry::new(KEYRING_SERVICE, &provider_account(provider))
@@ -94,19 +163,15 @@ fn save_api_key(provider: String, api_key: String) -> Result<(), VigilError> {
     entry
         .set_password(api_key.trim())
         .map_err(|e| VigilError::Message(e.to_string()))?;
+    mark_provider_configured(&provider)?;
     Ok(())
 }
 
+/// Metadata only — never opens Keychain (avoids password dialog after Touch ID).
 #[tauri::command]
 fn has_api_key(provider: String) -> Result<bool, VigilError> {
     validate_provider(&provider)?;
-    let entry = Entry::new(KEYRING_SERVICE, &provider_account(&provider))
-        .map_err(|e| VigilError::Message(e.to_string()))?;
-    match entry.get_password() {
-        Ok(p) => Ok(!p.is_empty()),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(e) => Err(VigilError::Message(e.to_string())),
-    }
+    Ok(read_configured_meta().iter().any(|p| p == &provider))
 }
 
 #[tauri::command]
@@ -115,20 +180,35 @@ fn delete_api_key(provider: String) -> Result<(), VigilError> {
     let entry = Entry::new(KEYRING_SERVICE, &provider_account(&provider))
         .map_err(|e| VigilError::Message(e.to_string()))?;
     match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(VigilError::Message(e.to_string())),
+        Ok(()) | Err(keyring::Error::NoEntry) => {}
+        Err(e) => return Err(VigilError::Message(e.to_string())),
     }
+    unmark_provider_configured(&provider)?;
+    Ok(())
+}
+
+/// Metadata only — never opens Keychain.
+#[tauri::command]
+fn list_configured_providers() -> Result<Vec<String>, VigilError> {
+    Ok(read_configured_meta())
 }
 
 #[tauri::command]
-fn list_configured_providers() -> Result<Vec<String>, VigilError> {
-    let mut out = Vec::new();
-    for p in ["openai", "gemini", "anthropic"] {
-        if has_api_key(p.to_string())? {
-            out.push(p.to_string());
-        }
-    }
-    Ok(out)
+fn settings_gate_open() -> bool {
+    SETTINGS_GATE_OPEN.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+fn lock_settings_gate() {
+    SETTINGS_GATE_OPEN.store(false, Ordering::SeqCst);
+    println!("[vigil] settings gate LOCKED");
+}
+
+/// Called by frontend ONLY after Touch ID returns authenticated=true.
+#[tauri::command]
+fn unlock_settings_gate() {
+    SETTINGS_GATE_OPEN.store(true, Ordering::SeqCst);
+    println!("[vigil] settings gate OPEN (explicit unlock)");
 }
 
 /// Read API key from OS Keychain for the given provider.
@@ -143,69 +223,127 @@ fn biometric_status() -> biometric::BiometricStatus {
 }
 
 #[tauri::command]
-fn authenticate_biometric(reason: Option<String>) -> Result<bool, VigilError> {
-    biometric::authenticate_biometric(reason.as_deref().unwrap_or("Unlock Vigil AI Agent"))
-        .map_err(VigilError::Message)
+async fn authenticate_biometric(
+    reason: Option<String>,
+    mode: Option<String>,
+    open_settings_gate: Option<bool>,
+) -> Result<biometric::BiometricAuthResult, VigilError> {
+    let reason = reason.unwrap_or_else(|| "Unlock Vigil AI Agent".into());
+    let auth_mode = biometric::AuthMode::parse(mode.as_deref());
+    let open_gate = open_settings_gate.unwrap_or(false);
+    println!("[vigil] invoke authenticate_biometric reason={reason:?} mode={auth_mode:?} open_gate={open_gate}");
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        biometric::authenticate_biometric(&reason, auth_mode).map_err(VigilError::Message)
+    })
+    .await
+    .map_err(|e| VigilError::Message(format!("biometric task join error: {e}")))?;
+
+    let result = result?;
+    if result.authenticated && open_gate {
+        SETTINGS_GATE_OPEN.store(true, Ordering::SeqCst);
+        println!("[vigil] settings gate OPEN after biometric auth");
+    }
+    println!("[vigil] authenticate_biometric result={result:?}");
+    Ok(result)
 }
 
-/// Biometric-gated key read. If `require_biometric` is true, Touch ID runs first.
+/// Verify a typed device login password (in-app form). No biometric UI.
 #[tauri::command]
-fn get_api_key_with_biometric(
+async fn verify_device_password(
+    password: String,
+    open_settings_gate: Option<bool>,
+) -> Result<biometric::BiometricAuthResult, VigilError> {
+    let open_gate = open_settings_gate.unwrap_or(false);
+    println!("[vigil] invoke verify_device_password open_gate={open_gate}");
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        biometric::verify_device_password(&password).map_err(VigilError::Message)
+    })
+    .await
+    .map_err(|e| VigilError::Message(format!("password verify task join error: {e}")))?;
+
+    let result = result?;
+    if result.authenticated && open_gate {
+        SETTINGS_GATE_OPEN.store(true, Ordering::SeqCst);
+        println!("[vigil] settings gate OPEN after password auth");
+    }
+    println!(
+        "[vigil] verify_device_password result authenticated={}",
+        result.authenticated
+    );
+    Ok(result)
+}
+
+/// Presence-gated key read (Layer 1), then OS vault read (Layer 2).
+/// Skips presence prompt when Settings gate is already open this session.
+#[tauri::command]
+async fn get_api_key_with_biometric(
     provider: String,
     require_biometric: Option<bool>,
 ) -> Result<String, VigilError> {
-    if require_biometric.unwrap_or(true) {
-        let ok = biometric::authenticate_biometric("Unlock Vigil AI Agent to read API key")
-            .map_err(VigilError::Message)?;
-        if !ok {
-            return Err(VigilError::Message(
-                "Biometric authentication failed or cancelled".into(),
-            ));
+    let gate_open = SETTINGS_GATE_OPEN.load(Ordering::SeqCst);
+    let require = require_biometric.unwrap_or(true) && !gate_open;
+    if require {
+        let result = tauri::async_runtime::spawn_blocking(|| {
+            biometric::authenticate_biometric(
+                "Unlock Vigil AI Agent to read API key",
+                biometric::AuthMode::Biometrics,
+            )
+            .map_err(VigilError::Message)
+        })
+        .await
+        .map_err(|e| VigilError::Message(format!("biometric task join error: {e}")))??;
+        if !result.authenticated {
+            return Err(VigilError::Message(format!(
+                "Biometric authentication failed: {}",
+                result.detail
+            )));
         }
     }
     read_keyring(&provider)
 }
 
-/// Biometric-gated key save.
+/// Presence-gated key save (Layer 1), then OS vault write (Layer 2).
+/// Skips presence prompt when Settings gate is already open this session.
 #[tauri::command]
-fn save_api_key_with_biometric(
+async fn save_api_key_with_biometric(
     provider: String,
     api_key: String,
     require_biometric: Option<bool>,
 ) -> Result<(), VigilError> {
-    if require_biometric.unwrap_or(true) {
-        let ok = biometric::authenticate_biometric("Unlock Vigil AI Agent to save API key")
-            .map_err(VigilError::Message)?;
-        if !ok {
-            return Err(VigilError::Message(
-                "Biometric authentication failed or cancelled".into(),
-            ));
+    let gate_open = SETTINGS_GATE_OPEN.load(Ordering::SeqCst);
+    let require = require_biometric.unwrap_or(true) && !gate_open;
+    if require {
+        let result = tauri::async_runtime::spawn_blocking(|| {
+            biometric::authenticate_biometric(
+                "Unlock Vigil AI Agent to save API key",
+                biometric::AuthMode::Biometrics,
+            )
+            .map_err(VigilError::Message)
+        })
+        .await
+        .map_err(|e| VigilError::Message(format!("biometric task join error: {e}")))??;
+        if !result.authenticated {
+            return Err(VigilError::Message(format!(
+                "Biometric authentication failed: {}",
+                result.detail
+            )));
         }
     }
     save_api_key(provider, api_key)
 }
 
-/// Masked preview without full secret (last 4 chars). Still keychain-gated optionally.
+/// Masked preview — uses metadata presence only (no Keychain read / no password UI).
 #[tauri::command]
 fn get_api_key_hint(provider: String) -> Result<String, VigilError> {
-    let key = read_keyring(&provider)?;
-    Ok(mask_key(&key))
+    validate_provider(&provider)?;
+    if !read_configured_meta().iter().any(|p| p == &provider) {
+        return Err(VigilError::Message("No key configured".into()));
+    }
+    // Do not call Keychain here — would pop a password dialog after Touch ID.
+    Ok("•••• configured".into())
 }
 
-fn mask_key(key: &str) -> String {
-    let trimmed = key.trim();
-    if trimmed.len() <= 4 {
-        return "••••".into();
-    }
-    let suffix = &trimmed[trimmed.len() - 4..];
-    if trimmed.starts_with("sk-") {
-        format!("sk-…{suffix}")
-    } else if trimmed.starts_with("AIza") {
-        format!("AIza…{suffix}")
-    } else {
-        format!("…{suffix}")
-    }
-}
 
 /// Returns the per-launch secret as hex (32 random bytes).
 #[tauri::command]
@@ -607,9 +745,13 @@ pub fn run() {
             has_api_key,
             delete_api_key,
             list_configured_providers,
+            settings_gate_open,
+            lock_settings_gate,
+            unlock_settings_gate,
             get_api_key,
             biometric_status,
             authenticate_biometric,
+            verify_device_password,
             get_api_key_with_biometric,
             save_api_key_with_biometric,
             get_api_key_hint,

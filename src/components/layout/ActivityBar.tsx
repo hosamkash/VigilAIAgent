@@ -12,7 +12,7 @@ const ITEMS: { id: SidebarView; label: string; icon: string }[] = [
 
 export function ActivityBar() {
   const { sidebarView, setSidebarView } = useLayoutStore();
-  const setView = useSettingsStore((s) => s.setView);
+  const openSettingsGate = useSettingsStore((s) => s.openSettingsGate);
 
   return (
     <nav
@@ -40,7 +40,7 @@ export function ActivityBar() {
         type="button"
         title="Settings"
         aria-label="Settings"
-        onClick={() => setView("settings")}
+        onClick={() => openSettingsGate()}
         className="flex h-10 w-10 items-center justify-center text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
       >
         ⚙

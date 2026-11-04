@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Vigil AI Agent uses biometrics to protect your API keys.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Vigil AI Agent uses the local network for its secure Node sidecar.</string>
+</dict>
+</plist>

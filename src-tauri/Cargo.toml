@@ -30,6 +30,17 @@ tauri-plugin-http = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authentication_Identity",
+  "Win32_System_SystemServices",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pam = "0.8"
+
 [profile.release]
 codegen-units = 1
 lto = true
