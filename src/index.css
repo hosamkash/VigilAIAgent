@@ -1,0 +1,117 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+:root {
+  /* Light is default — overridden by applyTheme() on boot */
+  --vigil-bg: #f3f3f3;
+  --vigil-panel: #ffffff;
+  --vigil-sidebar: #f3f3f3;
+  --vigil-activity: #e8e8e8;
+  --vigil-editor: #ffffff;
+  --vigil-border: #d4d4d4;
+  --vigil-border-soft: #e8e8e8;
+  --vigil-accent: #0078d4;
+  --vigil-accent-soft: #cce5f7;
+  --vigil-text: #1e1e1e;
+  --vigil-muted: #6e6e6e;
+  --vigil-danger: #c72e0f;
+  --vigil-success: #388a34;
+  --vigil-tab-active: #ffffff;
+  --vigil-tab-inactive: #ececec;
+  --vigil-selection: #add6ff;
+  --vigil-hover: #e8e8e8;
+  --vigil-input: #ffffff;
+  --vigil-scrollbar: #c1c1c1;
+  --vigil-scrollbar-hover: #a8a8a8;
+  --vigil-terminal-bg: #ffffff;
+  --vigil-terminal-fg: #1e1e1e;
+  --vigil-terminal-cursor: #1e1e1e;
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  background: var(--vigil-bg);
+  color: var(--vigil-text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--vigil-bg);
+  color: var(--vigil-text);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+button,
+textarea,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vigil-scrollbar);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vigil-scrollbar-hover);
+}
+
+.xterm {
+  height: 100%;
+  padding: 4px 8px;
+}
+
+.xterm-viewport {
+  overflow-y: auto !important;
+}
+
+.theme-card {
+  border: 1px solid var(--vigil-border);
+  background: var(--vigil-panel);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.theme-card[data-active="true"] {
+  border-color: var(--vigil-accent);
+  box-shadow: 0 0 0 1px var(--vigil-accent);
+}
+
+/* Allotment IDE splitters */
+.sash-horizontal,
+.sash-vertical {
+  transition: background-color 0.12s ease;
+}
+
+.sash-horizontal:hover,
+.sash-horizontal.sash-active {
+  background: var(--vigil-accent) !important;
+}
+
+.sash-vertical:hover,
+.sash-vertical.sash-active {
+  background: var(--vigil-accent) !important;
+}
+
+.split-view-view {
+  overflow: hidden !important;
+}

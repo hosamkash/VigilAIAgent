@@ -1,0 +1,29 @@
+[[permission]]
+identifier = "allow-vigil-commands"
+description = "Allow Vigil keychain, launch-secret, sidecar, and workspace FS commands"
+commands.allow = [
+  "save_api_key",
+  "has_api_key",
+  "delete_api_key",
+  "list_configured_providers",
+  "get_api_key",
+  "biometric_status",
+  "authenticate_biometric",
+  "get_api_key_with_biometric",
+  "save_api_key_with_biometric",
+  "get_api_key_hint",
+  "get_launch_secret",
+  "get_launch_session",
+  "verify_sidecar_hmac",
+  "get_api_key_for_sidecar",
+  "spawn_sidecar",
+  "get_workspace_cwd",
+  "sidecar_shared_secret_preview",
+  "list_dir",
+  "read_text_file",
+  "write_text_file",
+  "create_dir",
+  "delete_path",
+  "rename_path",
+  "run_workspace_command",
+]
