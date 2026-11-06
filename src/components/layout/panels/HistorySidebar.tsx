@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { useTabsStore } from "../../../store/tabsStore";
-import { upsertChatSession } from "../../../lib/db";
 
 function startOfDay(ts: number): number {
   const d = new Date(ts);
@@ -22,9 +21,18 @@ function groupFor(updatedAt: number, now = Date.now()): GroupKey {
 }
 
 export function HistorySidebar() {
-  const { history, tabs, restoreFromHistory, deleteFromHistory } =
-    useTabsStore();
+  const {
+    history,
+    tabs,
+    hydrated,
+    hydrateError,
+    restoreFromHistory,
+    deleteFromHistory,
+    renameHistoryItem,
+    hydrate,
+  } = useTabsStore();
   const [query, setQuery] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -51,19 +59,48 @@ export function HistorySidebar() {
 
   return (
     <div className="flex h-full flex-col p-2">
-      <div className="mb-2 text-[11px] font-semibold uppercase text-[var(--vigil-muted)]">
-        Vigil History
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-[11px] font-semibold uppercase text-[var(--vigil-muted)]">
+          Vigil History
+        </div>
+        <button
+          type="button"
+          className="text-[10px] text-[var(--vigil-accent)] hover:underline"
+          onClick={() => {
+            useTabsStore.setState({ hydrated: false });
+            void hydrate();
+          }}
+          title="Reload from VigilDB"
+        >
+          Refresh
+        </button>
       </div>
+
+      <div className="mb-2 rounded border border-[var(--vigil-border)] bg-[var(--vigil-hover)] px-2 py-1 text-[10px] text-[var(--vigil-muted)]">
+        Saved in VigilDB ·{" "}
+        <code className="text-[var(--vigil-text)]">
+          VigilAgent.chatSessions
+        </code>
+        {!hydrated ? " · loading…" : ` · ${history.length} archived`}
+      </div>
+
+      {hydrateError && (
+        <div className="mb-2 rounded border border-[var(--vigil-danger)]/30 px-2 py-1 text-[10px] text-[var(--vigil-danger)]">
+          {hydrateError}
+        </div>
+      )}
+
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search history"
-        className="mb-2 rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 text-xs"
+        className="mb-2 rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1 text-xs"
       />
+
       <div className="min-h-0 flex-1 space-y-3 overflow-auto">
         {groups.length === 0 && (
           <div className="text-xs text-[var(--vigil-muted)]">
-            No archived chats yet — close a tab to archive it.
+            No archived chats yet — close a chat tab to save it in VigilDB.
           </div>
         )}
         {groups.map((g) => (
@@ -78,9 +115,15 @@ export function HistorySidebar() {
               >
                 <button
                   type="button"
-                  onClick={() => restoreFromHistory(h.id)}
+                  disabled={busyId === h.id}
+                  onClick={() => {
+                    setBusyId(h.id);
+                    void restoreFromHistory(h.id).finally(() =>
+                      setBusyId(null),
+                    );
+                  }}
                   className="min-w-0 flex-1 truncate py-1 text-left text-xs"
-                  title="Restore tab"
+                  title="Restore into a chat tab"
                 >
                   {h.title}
                   <span className="ml-1 text-[10px] text-[var(--vigil-muted)]">
@@ -93,18 +136,8 @@ export function HistorySidebar() {
                   title="Rename"
                   onClick={() => {
                     const title = window.prompt("Rename", h.title);
-                    if (title) {
-                      useTabsStore.setState((s) => ({
-                        history: s.history.map((x) =>
-                          x.id === h.id ? { ...x, title } : x,
-                        ),
-                      }));
-                      void upsertChatSession({
-                        id: h.id,
-                        title,
-                        messagesJson: JSON.stringify(h.messages),
-                        archived: true,
-                      }).catch(() => undefined);
+                    if (title?.trim()) {
+                      void renameHistoryItem(h.id, title.trim());
                     }
                   }}
                 >
@@ -113,9 +146,11 @@ export function HistorySidebar() {
                 <button
                   type="button"
                   className="hidden px-1 text-[10px] text-[var(--vigil-danger)] group-hover:inline"
-                  title="Delete"
+                  title="Delete from VigilDB"
                   onClick={() => {
-                    if (!window.confirm(`Delete “${h.title}”?`)) return;
+                    if (!window.confirm(`Delete “${h.title}” from VigilDB?`)) {
+                      return;
+                    }
                     void deleteFromHistory(h.id);
                   }}
                 >
@@ -126,6 +161,7 @@ export function HistorySidebar() {
           </div>
         ))}
       </div>
+
       {tabs.length > 0 && (
         <div className="mt-2 border-t border-[var(--vigil-border)] pt-2 text-[10px] text-[var(--vigil-muted)]">
           {tabs.length} open chat tab{tabs.length === 1 ? "" : "s"}

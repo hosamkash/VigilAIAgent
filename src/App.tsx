@@ -15,6 +15,8 @@ import {
   DEFAULT_LAYOUT,
   sizesToPercents,
 } from "./lib/layout-persist";
+import { destroyExtHostWebview } from "./lib/embedded-site";
+import { MenuBar } from "./components/layout/MenuBar";
 
 function IdeShell() {
   const {
@@ -27,6 +29,10 @@ function IdeShell() {
   } = useLayoutStore();
   const horizontalRef = useRef<AllotmentHandle | null>(null);
   const verticalRef = useRef<AllotmentHandle | null>(null);
+
+  useEffect(() => {
+    void destroyExtHostWebview();
+  }, []);
 
   const onHorizontalChange = useCallback(
     (sizes: number[]) => {
@@ -145,18 +151,24 @@ function App() {
   useEffect(() => {
     initLayout();
     void refreshLogs();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("agents") === "1") {
+      useLayoutStore.setState({ sidebarVisible: false, bottomVisible: false });
+    }
   }, [refreshLogs, initLayout]);
 
-  // Hard gate: Settings panel only if unlocked after successful auth.
-  if (view === "settings" && settingsUnlocked === true) {
-    return <SettingsPanel />;
+  let body = <IdeShell />;
+  if (view === "settings" && settingsUnlocked === true) body = <SettingsPanel />;
+  else if (view === "settings-locked" || view === "settings") {
+    body = <SettingsUnlockScreen />;
   }
 
-  if (view === "settings-locked" || view === "settings") {
-    return <SettingsUnlockScreen />;
-  }
-
-  return <IdeShell />;
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <MenuBar />
+      <div className="min-h-0 flex-1">{body}</div>
+    </div>
+  );
 }
 
 export default App;

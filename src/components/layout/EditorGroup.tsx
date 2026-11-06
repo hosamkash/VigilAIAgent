@@ -1,8 +1,14 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import { useEditorTabsStore } from "../../store/editorTabsStore";
 import { useThemeStore, getTheme } from "../../store/themeStore";
-import { writeTextFile } from "../../lib/workspace-fs";
+import { runCommand } from "../../lib/ide-commands";
+import { setMonacoBridge } from "../../lib/monaco-bridge";
+import { ExtensionDetailView } from "../ExtensionDetailView";
+import { destroyExtHostWebview } from "../../lib/embedded-site";
+import { GitDiffBar } from "./GitDiffBar";
+import { StartScreen } from "../StartScreen";
+import { useExplorerStore } from "../../store/explorerStore";
 
 export function EditorGroup() {
   const {
@@ -12,22 +18,33 @@ export function EditorGroup() {
     setActive,
     closeTab,
     updateContent,
-    markSaved,
     clearRevealLine,
     toggleMinimap,
+    wordWrap,
   } = useEditorTabsStore();
+  const root = useExplorerStore((s) => s.root);
+  const launcherOpen = useExplorerStore((s) => s.launcherOpen);
   const themeId = useThemeStore((s) => s.themeId);
   const monacoTheme = getTheme(themeId).mode === "light" ? "vs" : "vs-dark";
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const revealDone = useRef<string | null>(null);
 
-  async function saveActive() {
-    if (!active || active.mode === "diff") return;
-    await writeTextFile(active.path, active.content);
-    markSaved(active.id);
-  }
+  // Kill any leftover native ext-host webview that was covering the UI
+  useEffect(() => {
+    void destroyExtHostWebview();
+  }, [activeId, active?.mode]);
+
+  useEffect(() => {
+    if (active?.mode !== "file") setMonacoBridge(null);
+  }, [active?.id, active?.mode]);
 
   const onMount: OnMount = (editor) => {
+    setMonacoBridge({
+      trigger: (command) => {
+        void editor.trigger("menu", command, null);
+        editor.focus();
+      },
+    });
     if (!active?.revealLine) return;
     const key = `${active.id}:${active.revealLine}`;
     if (revealDone.current === key) return;
@@ -38,13 +55,21 @@ export function EditorGroup() {
     clearRevealLine(active.id);
   };
 
+  if (launcherOpen || (!root && tabs.length === 0)) {
+    return (
+      <section className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--vigil-editor)]">
+        <StartScreen />
+      </section>
+    );
+  }
+
   const crumbs = active
     ? active.path.replace(/\\/g, "/").split("/").filter(Boolean).slice(-4)
     : [];
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--vigil-editor)]">
-      <div className="flex h-9 items-end overflow-x-auto border-b border-[var(--vigil-border)] bg-[var(--vigil-tab-inactive)]">
+      <div className="flex h-9 shrink-0 items-end overflow-x-auto border-b border-[var(--vigil-border)] bg-[var(--vigil-tab-inactive)]">
         {tabs.length === 0 && (
           <div className="px-3 py-2 text-xs text-[var(--vigil-muted)]">
             Open a file from the Explorer
@@ -71,7 +96,10 @@ export function EditorGroup() {
             <button
               type="button"
               className="rounded px-1 opacity-60 hover:bg-[var(--vigil-hover)] hover:opacity-100"
-              onClick={() => closeTab(tab.id)}
+              onClick={() => {
+                void destroyExtHostWebview();
+                closeTab(tab.id);
+              }}
               aria-label={`Close ${tab.title}`}
             >
               ×
@@ -90,7 +118,7 @@ export function EditorGroup() {
           {active && active.mode === "file" && (
             <button
               type="button"
-              onClick={() => void saveActive()}
+              onClick={() => void runCommand("file.save")}
               className="rounded border border-[var(--vigil-border)] px-2 py-0.5 text-[10px] text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
             >
               Save
@@ -99,8 +127,8 @@ export function EditorGroup() {
         </div>
       </div>
 
-      {active && (
-        <div className="flex h-6 items-center gap-1 overflow-hidden border-b border-[var(--vigil-border-soft)] px-3 text-[11px] text-[var(--vigil-muted)]">
+      {active && active.mode !== "extension" && (
+        <div className="flex h-6 shrink-0 items-center gap-1 overflow-hidden border-b border-[var(--vigil-border-soft)] px-3 text-[11px] text-[var(--vigil-muted)]">
           {crumbs.map((c, i) => (
             <span key={`${c}-${i}`} className="flex items-center gap-1">
               {i > 0 && <span>/</span>}
@@ -116,11 +144,17 @@ export function EditorGroup() {
         </div>
       )}
 
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-hidden">
         {!active && (
           <div className="flex h-full items-center justify-center text-sm text-[var(--vigil-muted)]">
             Vigil AI Agent — open a file to start editing
           </div>
+        )}
+        {active?.mode === "extension" && active.extension && (
+          <ExtensionDetailView
+            key={active.extension.extensionId}
+            meta={active.extension}
+          />
         )}
         {active?.mode === "file" && (
           <Editor
@@ -135,27 +169,33 @@ export function EditorGroup() {
             options={{
               fontSize: 13,
               minimap: { enabled: minimapEnabled },
+              wordWrap: wordWrap ? "on" : "off",
               automaticLayout: true,
               scrollBeyondLastLine: false,
             }}
           />
         )}
         {active?.mode === "diff" && (
-          <DiffEditor
-            key={`diff-${active.id}-${monacoTheme}`}
-            height="100%"
-            language={active.language}
-            theme={monacoTheme}
-            original={active.original}
-            modified={active.content}
-            options={{
-              readOnly: true,
-              renderSideBySide: true,
-              automaticLayout: true,
-              minimap: { enabled: minimapEnabled },
-              fontSize: 13,
-            }}
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            {active.gitDiff && <GitDiffBar meta={active.gitDiff} />}
+            <div className="min-h-0 flex-1">
+              <DiffEditor
+                key={`diff-${active.id}-${monacoTheme}`}
+                height="100%"
+                language={active.language}
+                theme={monacoTheme}
+                original={active.original}
+                modified={active.content}
+                options={{
+                  readOnly: true,
+                  renderSideBySide: true,
+                  automaticLayout: true,
+                  minimap: { enabled: minimapEnabled },
+                  fontSize: 13,
+                }}
+              />
+            </div>
+          </div>
         )}
       </div>
     </section>

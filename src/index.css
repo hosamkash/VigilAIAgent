@@ -115,3 +115,84 @@ button {
 .split-view-view {
   overflow: hidden !important;
 }
+
+@keyframes vigil-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ext-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: vigil-spin 0.7s linear infinite;
+}
+
+.ext-readme h1,
+.ext-readme h2,
+.ext-readme h3 {
+  margin: 0.85em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.ext-readme h1 {
+  font-size: 1.25rem;
+}
+
+.ext-readme h2 {
+  font-size: 1.1rem;
+}
+
+.ext-readme h3 {
+  font-size: 1rem;
+}
+
+.ext-readme p,
+.ext-readme ul,
+.ext-readme ol {
+  margin: 0.4em 0;
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.ext-readme ul,
+.ext-readme ol {
+  padding-inline-start: 1.25rem;
+}
+
+.ext-readme code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  background: var(--vigil-hover);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+.ext-readme pre {
+  overflow: auto;
+  margin: 0.6em 0;
+  padding: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--vigil-border);
+  background: var(--vigil-hover);
+}
+
+.ext-readme pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.ext-readme a {
+  color: var(--vigil-accent);
+}
+
+.ext-readme img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}

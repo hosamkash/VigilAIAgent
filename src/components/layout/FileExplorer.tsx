@@ -117,18 +117,35 @@ function TreeNode({
 }
 
 export function FileExplorer() {
-  const { root, children, init, loading, error } = useExplorerStore();
+  const { root, extraRoots, children, init, loading, error } = useExplorerStore();
 
   useEffect(() => {
     void init();
   }, [init]);
 
-  const entries = root ? (children[root] ?? []) : [];
+  const roots = root ? [root, ...extraRoots] : [];
+  const openLauncher = useExplorerStore((s) => s.openLauncher);
+
+  if (!root) {
+    return (
+      <div className="flex h-full flex-col p-3 text-xs">
+        <div className="mb-2 font-semibold uppercase text-[var(--vigil-muted)]">Explorer</div>
+        <p className="mb-3 text-[var(--vigil-text)]">No project is open.</p>
+        <button
+          type="button"
+          className="rounded bg-[var(--vigil-accent)] px-2 py-1 !text-white"
+          onClick={openLauncher}
+        >
+          Open the start screen
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col text-[var(--vigil-text)]">
       <div className="flex items-center justify-between px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--vigil-muted)]">
-        <span>Explorer: {root ? basename(root) : "…"}</span>
+        <span>Explorer{roots.length === 1 ? `: ${basename(roots[0]!)}` : ""}</span>
         <button type="button" className="hover:text-[var(--vigil-text)]" onClick={() => void init()} title="Refresh">
           ↻
         </button>
@@ -136,11 +153,20 @@ export function FileExplorer() {
       <div className="min-h-0 flex-1 overflow-auto pb-2">
         {loading && <div className="px-3 text-xs text-[var(--vigil-muted)]">Loading…</div>}
         {error && <div className="px-3 text-xs text-[var(--vigil-danger)]">{error}</div>}
-        {!loading && !error && entries.length === 0 && (
+        {!loading && !error && roots.every((path) => (children[path] ?? []).length === 0) && (
           <div className="px-3 text-xs text-[var(--vigil-muted)]">Empty workspace</div>
         )}
-        {entries.map((e) => (
-          <TreeNode key={e.path} entry={e} depth={0} />
+        {roots.map((path) => (
+          <div key={path}>
+            {roots.length > 1 && (
+              <div className="px-3 py-1 text-[11px] font-semibold text-[var(--vigil-muted)]">
+                {basename(path)}
+              </div>
+            )}
+            {(children[path] ?? []).map((entry) => (
+              <TreeNode key={entry.path} entry={entry} depth={0} />
+            ))}
+          </div>
         ))}
       </div>
       <div className="border-t border-[var(--vigil-border)] px-3 py-2 text-[10px] text-[var(--vigil-muted)]">

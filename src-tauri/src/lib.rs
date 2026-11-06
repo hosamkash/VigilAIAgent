@@ -3,12 +3,15 @@
 //! API keys live in the OS keychain via the `keyring` crate (never plaintext / localStorage).
 
 mod biometric;
+mod dictate;
+mod git_ops;
+mod github_oauth;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use hmac::{Hmac, Mac};
 use keyring::Entry;
 use rand::RngCore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::fs;
 use std::net::TcpStream;
@@ -21,7 +24,7 @@ use tauri::{Manager, State};
 
 type HmacSha256 = Hmac<Sha256>;
 
-const KEYRING_SERVICE: &str = "com.vigil.agent";
+pub(crate) const KEYRING_SERVICE: &str = "com.vigil.agent";
 const SIDECAR_PORT: u16 = 47821;
 
 /// Set ONLY after Touch ID succeeds for Settings. Cleared on lock/deny.
@@ -52,7 +55,7 @@ fn provider_account(provider: &str) -> String {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum VigilError {
+pub(crate) enum VigilError {
     #[error("{0}")]
     Message(String),
 }
@@ -272,6 +275,25 @@ async fn verify_device_password(
         result.authenticated
     );
     Ok(result)
+}
+
+/// Start native live dictation (macOS SFSpeechRecognizer). Emits `vigil-dictation` events.
+#[tauri::command]
+fn start_live_dictation(
+    app: tauri::AppHandle,
+    locale: Option<String>,
+) -> Result<(), VigilError> {
+    dictate::start_live_dictation(app, locale).map_err(VigilError::Message)
+}
+
+#[tauri::command]
+fn stop_live_dictation() -> Result<(), VigilError> {
+    dictate::stop_live_dictation().map_err(VigilError::Message)
+}
+
+#[tauri::command]
+fn live_dictation_running() -> bool {
+    dictate::is_live_dictation_running()
 }
 
 /// Presence-gated key read (Layer 1), then OS vault read (Layer 2).
@@ -609,10 +631,144 @@ fn spawn_sidecar(state: State<'_, SidecarState>) -> Result<SpawnResult, VigilErr
     spawn_sidecar_process(&state)
 }
 
+fn workspace_override_path() -> PathBuf {
+    app_support_dir().join("workspace_path.txt")
+}
+
+fn read_workspace_override() -> Option<PathBuf> {
+    let raw = fs::read_to_string(workspace_override_path()).ok()?;
+    let path = PathBuf::from(raw.trim());
+    if path.is_dir() { Some(path) } else { None }
+}
+
 /// Workspace cwd used by the sidecar / agent tools.
+/// A folder the user opened wins over the app's own project root.
 #[tauri::command]
 fn get_workspace_cwd() -> Result<String, VigilError> {
+    if let Some(path) = read_workspace_override() {
+        return Ok(path.to_string_lossy().into_owned());
+    }
     Ok(find_project_root()?.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn set_workspace_cwd(path: String) -> Result<String, VigilError> {
+    let dir = PathBuf::from(path.trim());
+    if !dir.is_dir() {
+        return Err(VigilError::Message(format!(
+            "Not a folder: {}",
+            dir.display()
+        )));
+    }
+    let canon = dir.canonicalize().unwrap_or(dir);
+    let parent = workspace_override_path();
+    if let Some(folder) = parent.parent() {
+        fs::create_dir_all(folder).map_err(|e| VigilError::Message(e.to_string()))?;
+    }
+    fs::write(&parent, canon.to_string_lossy().as_bytes())
+        .map_err(|e| VigilError::Message(e.to_string()))?;
+    Ok(canon.to_string_lossy().into_owned())
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GitHostProfile {
+    host: String,
+    base_url: String,
+    login: String,
+    credential_user: String,
+    credential_host: String,
+}
+
+fn git_hosts_path() -> PathBuf {
+    app_support_dir().join("git_hosts.json")
+}
+
+fn validate_git_host(host: &str) -> Result<(), VigilError> {
+    match host {
+        "github" | "gitlab" | "azure" | "other" => Ok(()),
+        _ => Err(VigilError::Message(format!("Unknown git host '{host}'"))),
+    }
+}
+
+fn read_git_hosts() -> Vec<GitHostProfile> {
+    let Ok(raw) = fs::read_to_string(git_hosts_path()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn write_git_hosts(hosts: &[GitHostProfile]) -> Result<(), VigilError> {
+    let path = git_hosts_path();
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder).map_err(|e| VigilError::Message(e.to_string()))?;
+    }
+    let raw = serde_json::to_string_pretty(hosts).map_err(|e| VigilError::Message(e.to_string()))?;
+    fs::write(path, raw).map_err(|e| VigilError::Message(e.to_string()))
+}
+
+fn git_token_account(host: &str) -> String {
+    format!("git-token:{host}")
+}
+
+#[tauri::command]
+fn list_git_hosts() -> Result<Vec<GitHostProfile>, VigilError> {
+    Ok(read_git_hosts())
+}
+
+#[tauri::command]
+fn save_git_host(
+    host: String,
+    token: String,
+    base_url: String,
+    login: String,
+    credential_user: String,
+    credential_host: String,
+) -> Result<(), VigilError> {
+    validate_git_host(&host)?;
+    let secret = token.trim();
+    if secret.is_empty() {
+        return Err(VigilError::Message("Token cannot be empty".into()));
+    }
+    let entry = Entry::new(KEYRING_SERVICE, &git_token_account(&host))
+        .map_err(|e| VigilError::Message(e.to_string()))?;
+    entry
+        .set_password(secret)
+        .map_err(|e| VigilError::Message(e.to_string()))?;
+    let mut hosts = read_git_hosts();
+    hosts.retain(|item| item.host != host);
+    hosts.push(GitHostProfile {
+        host,
+        base_url: base_url.trim().trim_end_matches('/').to_string(),
+        login: login.trim().to_string(),
+        credential_user: credential_user.trim().to_string(),
+        credential_host: credential_host.trim().to_string(),
+    });
+    write_git_hosts(&hosts)
+}
+
+#[tauri::command]
+fn get_git_token(host: String) -> Result<String, VigilError> {
+    validate_git_host(&host)?;
+    let entry = Entry::new(KEYRING_SERVICE, &git_token_account(&host))
+        .map_err(|e| VigilError::Message(e.to_string()))?;
+    entry
+        .get_password()
+        .map_err(|e| VigilError::Message(e.to_string()))
+}
+
+#[tauri::command]
+fn forget_git_host(host: String) -> Result<(), VigilError> {
+    validate_git_host(&host)?;
+    if let Ok(entry) = Entry::new(KEYRING_SERVICE, &git_token_account(&host)) {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(VigilError::Message(e.to_string())),
+        }
+    }
+    let mut hosts = read_git_hosts();
+    hosts.retain(|item| item.host != host);
+    write_git_hosts(&hosts)
 }
 
 /// Dev helper: length-only preview so UI can confirm secret was minted.
@@ -718,6 +874,30 @@ fn run_workspace_command(command: String, cwd: String) -> Result<String, VigilEr
     Ok(text)
 }
 
+#[tauri::command]
+fn git_repo_info(cwd: String) -> Result<git_ops::GitRepoInfo, VigilError> {
+    git_ops::repo_info(&cwd).map_err(VigilError::Message)
+}
+
+#[tauri::command]
+fn git_has_commits(cwd: String) -> Result<bool, VigilError> {
+    git_ops::has_commits(&cwd).map_err(VigilError::Message)
+}
+
+#[tauri::command]
+fn git_create_branch(
+    cwd: String,
+    name: String,
+    checkout: Option<bool>,
+) -> Result<String, VigilError> {
+    git_ops::create_branch(&cwd, &name, checkout.unwrap_or(true)).map_err(VigilError::Message)
+}
+
+#[tauri::command]
+fn git_validate_branch_name(name: String) -> Result<(), VigilError> {
+    git_ops::validate_branch_name(&name).map_err(VigilError::Message)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let launch = launch_secret();
@@ -761,6 +941,12 @@ pub fn run() {
             get_api_key_for_sidecar,
             spawn_sidecar,
             get_workspace_cwd,
+            set_workspace_cwd,
+            list_git_hosts,
+            save_git_host,
+            get_git_token,
+            forget_git_host,
+            github_oauth::github_browser_login,
             sidecar_shared_secret_preview,
             list_dir,
             read_text_file,
@@ -769,7 +955,23 @@ pub fn run() {
             delete_path,
             rename_path,
             run_workspace_command,
+            git_repo_info,
+            git_has_commits,
+            git_create_branch,
+            git_validate_branch_name,
+            start_live_dictation,
+            stop_live_dictation,
+            live_dictation_running,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Vigil AI Agent");
+        .build(tauri::generate_context!())
+        .expect("error while running Vigil AI Agent")
+        .run(|app, event| {
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        });
 }

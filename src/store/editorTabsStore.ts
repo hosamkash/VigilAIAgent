@@ -1,6 +1,21 @@
 import { create } from "zustand";
 import { basename, languageFromPath } from "../lib/workspace-fs";
 
+export interface ExtensionTabMeta {
+  extensionId: string;
+  detailUrl: string;
+  name: string;
+  publisher: string;
+  builtin?: boolean;
+}
+
+export interface GitDiffMeta {
+  repoRoot: string;
+  relPath: string;
+  staged: boolean;
+  conflicted: boolean;
+}
+
 export interface EditorTab {
   id: string;
   path: string;
@@ -10,14 +25,18 @@ export interface EditorTab {
   original: string;
   dirty: boolean;
   pinned: boolean;
-  mode: "file" | "diff";
+  mode: "file" | "diff" | "extension";
   revealLine?: number;
+  extension?: ExtensionTabMeta;
+  gitDiff?: GitDiffMeta;
 }
 
 interface EditorTabsState {
   tabs: EditorTab[];
   activeId: string | null;
   minimapEnabled: boolean;
+  autoSave: boolean;
+  wordWrap: boolean;
   openFile: (input: {
     path: string;
     content: string;
@@ -25,30 +44,57 @@ interface EditorTabsState {
     original?: string;
     revealLine?: number;
   }) => void;
+  openExtension: (meta: ExtensionTabMeta) => void;
   closeTab: (id: string) => void;
+  closeAll: () => void;
   setActive: (id: string) => void;
   updateContent: (id: string, content: string) => void;
   markSaved: (id: string) => void;
+  openUntitled: () => void;
+  assignPath: (id: string, path: string) => void;
+  revertContent: (id: string, content: string) => void;
+  toggleAutoSave: () => void;
+  toggleWordWrap: () => void;
   reorder: (from: number, to: number) => void;
   showAgentDiff: (path: string, original: string, modified: string) => void;
+  showGitDiff: (
+    path: string,
+    original: string,
+    modified: string,
+    gitDiff: GitDiffMeta,
+  ) => void;
   clearRevealLine: (id: string) => void;
   toggleMinimap: () => void;
 }
 
 const MINIMAP_KEY = "vigil.editor.minimap";
+const AUTOSAVE_KEY = "vigil.editor.autosave";
+const WORDWRAP_KEY = "vigil.editor.wordwrap";
 
-function loadMinimap(): boolean {
+function loadFlag(key: string): boolean {
   try {
-    return localStorage.getItem(MINIMAP_KEY) === "1";
+    return localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
 }
 
+function saveFlag(key: string, on: boolean) {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+let untitledCount = 0;
+
 export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
   tabs: [],
   activeId: null,
-  minimapEnabled: loadMinimap(),
+  minimapEnabled: loadFlag(MINIMAP_KEY),
+  autoSave: loadFlag(AUTOSAVE_KEY),
+  wordWrap: loadFlag(WORDWRAP_KEY),
   openFile: ({ path, content, mode = "file", original, revealLine }) => {
     const existing = get().tabs.find((t) => t.path === path && t.mode === mode);
     if (existing) {
@@ -87,6 +133,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
         s.activeId === id ? (tabs[tabs.length - 1]?.id ?? null) : s.activeId;
       return { tabs, activeId };
     }),
+  closeAll: () => set({ tabs: [], activeId: null }),
   setActive: (activeId) => set({ activeId }),
   updateContent: (id, content) =>
     set((s) => ({
@@ -100,6 +147,54 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
         t.id === id ? { ...t, original: t.content, dirty: false } : t,
       ),
     })),
+  openUntitled: () => {
+    untitledCount += 1;
+    const tab: EditorTab = {
+      id: crypto.randomUUID(),
+      path: `untitled:${untitledCount}`,
+      title: `Untitled-${untitledCount}`,
+      language: "plaintext",
+      content: "",
+      original: "",
+      dirty: false,
+      pinned: false,
+      mode: "file",
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+  },
+  assignPath: (id, path) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              path,
+              title: basename(path),
+              language: languageFromPath(path),
+              original: t.content,
+              dirty: false,
+            }
+          : t,
+      ),
+    })),
+  revertContent: (id, content) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === id ? { ...t, content, original: content, dirty: false } : t,
+      ),
+    })),
+  toggleAutoSave: () =>
+    set((s) => {
+      const autoSave = !s.autoSave;
+      saveFlag(AUTOSAVE_KEY, autoSave);
+      return { autoSave };
+    }),
+  toggleWordWrap: () =>
+    set((s) => {
+      const wordWrap = !s.wordWrap;
+      saveFlag(WORDWRAP_KEY, wordWrap);
+      return { wordWrap };
+    }),
   reorder: (from, to) =>
     set((s) => {
       const tabs = [...s.tabs];
@@ -108,6 +203,27 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
       tabs.splice(to, 0, item);
       return { tabs };
     }),
+  openExtension: (meta) => {
+    const id = `extension:${meta.extensionId}`;
+    const existing = get().tabs.find((t) => t.id === id);
+    if (existing) {
+      set({ activeId: existing.id });
+      return;
+    }
+    const tab: EditorTab = {
+      id,
+      path: id,
+      title: meta.name,
+      language: "plaintext",
+      content: "",
+      original: "",
+      dirty: false,
+      pinned: false,
+      mode: "extension",
+      extension: meta,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+  },
   showAgentDiff: (path, original, modified) => {
     const id = `diff:${path}`;
     const existing = get().tabs.find((t) => t.id === id);
@@ -116,7 +232,13 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
         activeId: existing.id,
         tabs: s.tabs.map((t) =>
           t.id === id
-            ? { ...t, content: modified, original, dirty: false }
+            ? {
+                ...t,
+                content: modified,
+                original,
+                dirty: false,
+                gitDiff: undefined,
+              }
             : t,
         ),
       }));
@@ -135,6 +257,34 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
   },
+  showGitDiff: (path, original, modified, gitDiff) => {
+    const id = `diff:${path}`;
+    const existing = get().tabs.find((t) => t.id === id);
+    if (existing) {
+      set((s) => ({
+        activeId: existing.id,
+        tabs: s.tabs.map((t) =>
+          t.id === id
+            ? { ...t, content: modified, original, dirty: false, gitDiff }
+            : t,
+        ),
+      }));
+      return;
+    }
+    const tab: EditorTab = {
+      id,
+      path,
+      title: `${basename(path)} (diff)`,
+      language: languageFromPath(path),
+      content: modified,
+      original,
+      dirty: false,
+      pinned: false,
+      mode: "diff",
+      gitDiff,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+  },
   clearRevealLine: (id) =>
     set((s) => ({
       tabs: s.tabs.map((t) =>
@@ -144,11 +294,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
   toggleMinimap: () =>
     set((s) => {
       const minimapEnabled = !s.minimapEnabled;
-      try {
-        localStorage.setItem(MINIMAP_KEY, minimapEnabled ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
+      saveFlag(MINIMAP_KEY, minimapEnabled);
       return { minimapEnabled };
     }),
 }));

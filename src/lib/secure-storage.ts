@@ -143,6 +143,15 @@ export async function getApiKey(provider: ApiKeyProvider): Promise<string> {
   }
 }
 
+/**
+ * Read API key WITHOUT biometric / Settings unlock.
+ * For chat helpers (voice STT, image enrich) so mic does not pop Touch ID every time.
+ * Still uses OS vault (Layer 2); may show a one-time Keychain allow if ACL requires it.
+ */
+export async function getApiKeyQuiet(provider: ApiKeyProvider): Promise<string> {
+  return invoke<string>("get_api_key", { provider });
+}
+
 export async function getApiKeyHint(provider: ApiKeyProvider): Promise<string> {
   return invoke<string>("get_api_key_hint", { provider });
 }

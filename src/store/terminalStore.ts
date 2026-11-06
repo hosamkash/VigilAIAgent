@@ -20,6 +20,8 @@ interface TerminalState {
   appendOutput: (chunk: string) => void;
   addProblem: (msg: string) => void;
   clearProblems: () => void;
+  clearSignal: number;
+  requestClear: () => void;
 }
 
 let termCount = 0;
@@ -29,6 +31,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   activeId: null,
   problems: [],
   output: "",
+  clearSignal: 0,
   ensureDefault: (cwd) => {
     if (get().terminals.length > 0) return;
     const id = crypto.randomUUID();
@@ -76,4 +79,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((s) => ({ output: `${s.output}${chunk}` })),
   addProblem: (msg) => set((s) => ({ problems: [...s.problems, msg] })),
   clearProblems: () => set({ problems: [] }),
+  requestClear: () =>
+    set((s) => ({
+      clearSignal: s.clearSignal + 1,
+      terminals: s.terminals.map((t) =>
+        t.id === s.activeId ? { ...t, history: "$ " } : t,
+      ),
+    })),
 }));

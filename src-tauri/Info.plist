@@ -6,5 +6,10 @@
 	<string>Vigil AI Agent uses biometrics to protect your API keys.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Vigil AI Agent uses the local network for its secure Node sidecar.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Vigil AI Agent needs the microphone for voice-to-text in chat.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Vigil AI Agent uses speech recognition to turn your voice into chat text.</string>
 </dict>
 </plist>
+

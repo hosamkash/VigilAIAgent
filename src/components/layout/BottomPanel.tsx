@@ -21,6 +21,7 @@ export function BottomPanel({ fill = false }: { fill?: boolean }) {
     setActive,
     appendHistory,
     clearProblems,
+    clearSignal,
   } = useTerminalStore();
   const root = useExplorerStore((s) => s.root);
   const themeId = useThemeStore((s) => s.themeId);
@@ -117,6 +118,15 @@ export function BottomPanel({ fill = false }: { fill?: boolean }) {
     };
   }, [bottomVisible, bottomTab, activeId, appendHistory, themeId, fill]);
 
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || clearSignal === 0) return;
+    term.clear();
+    lineRef.current = "";
+    setCmd("");
+    term.write("$ ");
+  }, [clearSignal]);
+
   if (!fill && !bottomVisible) {
     return (
       <button
@@ -131,6 +141,7 @@ export function BottomPanel({ fill = false }: { fill?: boolean }) {
 
   return (
     <div
+      data-vigil-bottom-panel
       className="flex h-full min-h-0 shrink-0 flex-col border-t border-[var(--vigil-border)] bg-[var(--vigil-panel)]"
       style={fill ? undefined : { height: bottomHeight }}
     >

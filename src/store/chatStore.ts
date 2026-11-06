@@ -3,12 +3,20 @@ import type { LlmProviderId } from "../lib/model-router";
 
 export type ChatRole = "user" | "assistant" | "system";
 
+export type ChatImageAttachment = {
+  id: string;
+  name: string;
+  dataUrl: string;
+};
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
   createdAt: number;
   modelLabel?: string;
+  /** Cursor-like image previews shown on user bubbles */
+  images?: ChatImageAttachment[];
 }
 
 interface ChatState {
@@ -22,7 +30,10 @@ interface ChatState {
   appendMessage: (
     msg: Omit<ChatMessage, "id" | "createdAt"> & { id?: string },
   ) => string;
-  updateMessage: (id: string, patch: Partial<Pick<ChatMessage, "content" | "modelLabel">>) => void;
+  updateMessage: (
+    id: string,
+    patch: Partial<Pick<ChatMessage, "content" | "modelLabel" | "images">>,
+  ) => void;
   clearMessages: () => void;
 }
 
@@ -45,6 +56,7 @@ export const useChatStore = create<ChatState>((set) => ({
           role: msg.role,
           content: msg.content,
           modelLabel: msg.modelLabel,
+          images: msg.images,
         },
       ],
     }));

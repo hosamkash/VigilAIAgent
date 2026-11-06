@@ -27,6 +27,7 @@ interface LayoutState {
   chatWidth: number;
   layoutSizes: LayoutSizes;
   setSidebarView: (view: SidebarView) => void;
+  showSidebar: (view: SidebarView) => void;
   toggleSidebar: () => void;
   toggleBottom: () => void;
   setBottomTab: (tab: BottomTab) => void;
@@ -52,6 +53,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
       sidebarVisible:
         s.sidebarView === sidebarView ? !s.sidebarVisible : true,
     })),
+  showSidebar: (sidebarView) => set({ sidebarView, sidebarVisible: true }),
   toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
   toggleBottom: () => set((s) => ({ bottomVisible: !s.bottomVisible })),
   setBottomTab: (bottomTab) => set({ bottomTab, bottomVisible: true }),
