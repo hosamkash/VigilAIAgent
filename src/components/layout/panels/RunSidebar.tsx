@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useExplorerStore } from "../../../store/explorerStore";
 import { useLayoutStore } from "../../../store/layoutStore";
 import { useTerminalStore } from "../../../store/terminalStore";
-import { readTextFile, runWorkspaceCommand } from "../../../lib/workspace-fs";
+import { readTextFile } from "../../../lib/workspace-fs";
 import { useNativeLiveDictation } from "../../../lib/hooks/useNativeLiveDictation";
 import { useSpeechDictation } from "../../../lib/hooks/useSpeechDictation";
 import { SpeechDictationMicButton } from "../../SpeechDictationMicButton";
@@ -13,12 +14,16 @@ import {
   upsertRunOverride,
   type RunCommandDoc,
 } from "../../../lib/vigil-db";
+import { suggestRunCommand } from "../../../lib/run-command-ai";
+import { Sparkles } from "lucide-react";
 
 interface DiscoveredConfig {
   id: string;
   command: string;
   description: string;
   source: "package.json" | "launch";
+  /** Raw package.json script body, when known. */
+  scriptBody?: string;
 }
 
 interface DisplayConfig {
@@ -117,31 +122,40 @@ export function RunSidebar() {
   const root = useExplorerStore((s) => s.root);
   const setBottomTab = useLayoutStore((s) => s.setBottomTab);
   const appendOutput = useTerminalStore((s) => s.appendOutput);
+  const ensureDefault = useTerminalStore((s) => s.ensureDefault);
+  const enqueueTerminalJob = useTerminalStore((s) => s.enqueueTerminalJob);
 
   const [dbDocs, setDbDocs] = useState<RunCommandDoc[]>([]);
   const [discovered, setDiscovered] = useState<DiscoveredConfig[]>([]);
   const [launchJson, setLaunchJson] = useState<string | null>(null);
-  const [running, setRunning] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [draftCommand, setDraftCommand] = useState("");
   const [draftDesc, setDraftDesc] = useState("");
+  const [aiPrompt, setAiPrompt] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<DisplayConfig | null>(null);
   const [busy, setBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const draftDescRef = useRef(draftDesc);
-  draftDescRef.current = draftDesc;
+  const [confirmRun, setConfirmRun] = useState<{
+    command: string;
+    cwd: string;
+  } | null>(null);
+  const confirmingRef = useRef(false);
+  const aiAbortRef = useRef<AbortController | null>(null);
+  const aiPromptRef = useRef(aiPrompt);
+  aiPromptRef.current = aiPrompt;
 
   const inTauri =
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   const nativeDictation = useNativeLiveDictation({
-    getBaseText: () => draftDescRef.current,
-    onText: setDraftDesc,
+    getBaseText: () => aiPromptRef.current,
+    onText: setAiPrompt,
     onError: (msg) => setError(msg),
   });
   const webDictation = useSpeechDictation({
-    getBaseText: () => draftDescRef.current,
-    onText: setDraftDesc,
+    getBaseText: () => aiPromptRef.current,
+    onText: setAiPrompt,
     mode: "append",
     stopOnSilence: false,
   });
@@ -155,7 +169,7 @@ export function RunSidebar() {
   }
 
   function toggleDictation() {
-    if (busy) return;
+    if (busy || aiBusy) return;
     setError(null);
     if (inTauri) nativeDictation.toggle();
     else webDictation.toggle();
@@ -193,6 +207,7 @@ export function RunSidebar() {
             command: `npm run ${name}`,
             description: describeScript(name, cmd),
             source: "package.json",
+            scriptBody: cmd,
           });
         }
       } catch {
@@ -271,8 +286,12 @@ export function RunSidebar() {
 
   function resetForm() {
     stopDictation();
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
     setDraftCommand("");
     setDraftDesc("");
+    setAiPrompt("");
+    setAiBusy(false);
     setEditing(null);
     setShowForm(false);
   }
@@ -281,6 +300,7 @@ export function RunSidebar() {
     setEditing(null);
     setDraftCommand("");
     setDraftDesc("");
+    setAiPrompt("");
     setShowForm(true);
   }
 
@@ -288,7 +308,46 @@ export function RunSidebar() {
     setEditing(cfg);
     setDraftCommand(cfg.command);
     setDraftDesc(cfg.description);
+    setAiPrompt("");
     setShowForm(true);
+  }
+
+  async function generateWithAi() {
+    const request = aiPrompt.trim() || draftDesc.trim();
+    if (!request || aiBusy || busy) return;
+    stopDictation();
+    setAiBusy(true);
+    setError(null);
+    aiAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+    try {
+      const scripts = discovered
+        .filter((item) => item.source === "package.json")
+        .map((item) => ({
+          name: item.id.replace(/^npm:/, ""),
+          command: item.command,
+          scriptBody: item.scriptBody,
+        }));
+      const suggestion = await suggestRunCommand(request, {
+        scripts,
+        signal: controller.signal,
+      });
+      setDraftCommand(suggestion.command);
+      setDraftDesc(suggestion.description || draftDesc);
+      if (!aiPrompt.trim()) setAiPrompt(request);
+    } catch (err) {
+      if (
+        (err instanceof DOMException && err.name === "AbortError") ||
+        (err instanceof Error && err.name === "AbortError")
+      ) {
+        return;
+      }
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (aiAbortRef.current === controller) aiAbortRef.current = null;
+      setAiBusy(false);
+    }
   }
 
   async function saveDraft() {
@@ -342,32 +401,109 @@ export function RunSidebar() {
   }
 
   async function run(cfg: DisplayConfig) {
-    if (!root) return;
+    if (!root || confirmingRef.current) return;
     if (cfg.source === "launch") {
       setBottomTab("output");
       appendOutput(launchJson ?? "(no launch.json)");
       return;
     }
-    setRunning(cfg.id);
-    setBottomTab("output");
-    appendOutput(`\n$ ${cfg.command}\n`);
+    confirmingRef.current = true;
     try {
-      const out = await runWorkspaceCommand(cfg.command, root);
-      appendOutput(out + "\n");
-      const term = useTerminalStore.getState();
-      if (term.activeId) {
-        term.appendHistory(term.activeId, `$ ${cfg.command}\n${out}\n$ `);
-      }
+      ensureDefault(root);
+      setBottomTab("terminal");
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => resolve());
+        });
+      });
+      // Write only — never execute until the in-app confirm is accepted.
+      await enqueueTerminalJob(cfg.command, root, "write");
+      setConfirmRun({ command: cfg.command, cwd: root });
     } catch (err) {
-      appendOutput(String(err) + "\n");
+      confirmingRef.current = false;
+      setError(String(err));
+    }
+  }
+
+  async function acceptConfirmRun() {
+    const job = confirmRun;
+    setConfirmRun(null);
+    if (!job) {
+      confirmingRef.current = false;
+      return;
+    }
+    try {
+      await enqueueTerminalJob(job.command, job.cwd, "execute");
     } finally {
-      setRunning(null);
+      confirmingRef.current = false;
+    }
+  }
+
+  async function cancelConfirmRun() {
+    const job = confirmRun;
+    setConfirmRun(null);
+    try {
+      if (job) await enqueueTerminalJob("", job.cwd, "prompt");
+    } finally {
+      confirmingRef.current = false;
     }
   }
 
   return (
     <div className="flex h-full flex-col p-2">
-      <div className="mb-2 flex items-center justify-between gap-2">
+      {confirmRun &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) void cancelConfirmRun();
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Confirm run command"
+              className="w-full max-w-md rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-4 shadow-xl"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  void cancelConfirmRun();
+                }
+              }}
+            >
+              <div className="text-sm font-semibold text-[var(--vigil-text)]">
+                Run this command?
+              </div>
+              <p className="mt-1 text-xs text-[var(--vigil-muted)]">
+                It is already written in the Terminal. OK runs it. Cancel leaves
+                it written only.
+              </p>
+              <pre className="mt-3 max-h-40 overflow-auto rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] p-2 font-mono text-[11px] text-[var(--vigil-text)] whitespace-pre-wrap">
+                {confirmRun.command}
+              </pre>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs !text-[var(--vigil-text)] hover:bg-[var(--vigil-hover)]"
+                  onClick={() => void cancelConfirmRun()}
+                  autoFocus
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-[var(--vigil-accent)] px-3 py-1.5 text-xs !text-white"
+                  onClick={() => void acceptConfirmRun()}
+                >
+                  OK — Run
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+      <div className="mb-2 flex items-center justify-between gap-2 pr-12">
         <div className="text-[11px] font-semibold uppercase text-[var(--vigil-muted)]">
           Run and Debug
         </div>
@@ -405,12 +541,59 @@ export function RunSidebar() {
                 : "Edit (saves as your override in VigilDB)"
               : "New quick command"}
           </div>
+          <div className="rounded border border-[var(--vigil-accent)]/30 bg-[var(--vigil-accent-soft)]/40 p-1.5">
+            <div className="mb-1 text-[10px] font-medium text-[var(--vigil-accent)]">
+              Ask AI to write the command
+            </div>
+            <textarea
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              placeholder="Example: run dev mode, and kill the port if it’s already open"
+              rows={2}
+              className="w-full resize-none rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1.5 text-[13px] leading-snug"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  void generateWithAi();
+                }
+                if (e.key === "Escape") resetForm();
+              }}
+            />
+            <div className="mt-1 flex items-center gap-1">
+              <button
+                type="button"
+                disabled={(!aiPrompt.trim() && !draftDesc.trim()) || aiBusy || busy}
+                className="inline-flex items-center gap-1 rounded bg-[var(--vigil-accent)] px-2 py-1 text-[10px] text-white disabled:opacity-40"
+                onClick={() => void generateWithAi()}
+                title="Generate command with AI"
+              >
+                <Sparkles className="h-3 w-3" aria-hidden />
+                {aiBusy ? "Writing…" : "AI"}
+              </button>
+              <SpeechDictationMicButton
+                size="sm"
+                active={listening}
+                disabled={busy || aiBusy}
+                onClick={toggleDictation}
+                title={
+                  listening
+                    ? "Stop voice to text"
+                    : "Voice to text — tell AI what you need"
+                }
+              />
+              {listening && (
+                <span className="text-[10px] text-[var(--vigil-muted)]">
+                  Listening…
+                </span>
+              )}
+            </div>
+          </div>
           <input
             value={draftCommand}
             onChange={(e) => setDraftCommand(e.target.value)}
             placeholder="Command — e.g. npm run dev"
-            className="w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1 font-mono text-[11px]"
-            autoFocus
+            className="w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1.5 font-mono text-[13px] leading-snug"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -424,12 +607,12 @@ export function RunSidebar() {
             onChange={(e) => setDraftDesc(e.target.value)}
             placeholder="Description / ليه الأمر ده؟ (عربي أو English)"
             rows={2}
-            className="w-full resize-none rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1 text-[11px]"
+            className="w-full resize-none rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1.5 text-[13px] leading-snug"
           />
           <div className="flex items-center gap-1">
             <button
               type="button"
-              disabled={!draftCommand.trim() || busy}
+              disabled={!draftCommand.trim() || busy || aiBusy}
               className="rounded bg-[var(--vigil-accent)] px-2 py-1 text-[10px] text-white disabled:opacity-40"
               onClick={() => void saveDraft()}
             >
@@ -442,22 +625,6 @@ export function RunSidebar() {
             >
               Cancel
             </button>
-            <SpeechDictationMicButton
-              size="sm"
-              active={listening}
-              disabled={busy}
-              onClick={toggleDictation}
-              title={
-                listening
-                  ? "Stop voice to text"
-                  : "Voice to text — description"
-              }
-            />
-            {listening && (
-              <span className="text-[10px] text-[var(--vigil-muted)]">
-                Listening…
-              </span>
-            )}
           </div>
         </div>
       )}
@@ -476,7 +643,6 @@ export function RunSidebar() {
             <CommandRow
               key={cfg.id}
               cfg={cfg}
-              running={running === cfg.id}
               onRun={() => void run(cfg)}
               onEdit={() => startEdit(cfg)}
               onDelete={() => void removeCfg(cfg)}
@@ -497,7 +663,6 @@ export function RunSidebar() {
             <CommandRow
               key={cfg.id}
               cfg={cfg}
-              running={running === cfg.id}
               onRun={() => void run(cfg)}
               onEdit={() => startEdit(cfg)}
               onDelete={
@@ -550,13 +715,11 @@ function Section({
 
 function CommandRow({
   cfg,
-  running,
   onRun,
   onEdit,
   onDelete,
 }: {
   cfg: DisplayConfig;
-  running: boolean;
   onRun: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
@@ -565,12 +728,11 @@ function CommandRow({
     <div className="group flex items-start gap-2 rounded px-1 py-1 hover:bg-[var(--vigil-hover)]">
       <button
         type="button"
-        disabled={running}
         onClick={onRun}
-        className="mt-0.5 shrink-0 rounded bg-[var(--vigil-accent)] px-2 py-0.5 text-[10px] text-white disabled:opacity-40"
+        className="mt-0.5 shrink-0 rounded bg-[var(--vigil-accent)] px-2 py-0.5 text-[10px] !text-white"
         title="Run"
       >
-        {running ? "…" : "▶"}
+        ▶
       </button>
       <div className="min-w-0 flex-1">
         <div className="truncate font-mono text-xs" title={cfg.command}>

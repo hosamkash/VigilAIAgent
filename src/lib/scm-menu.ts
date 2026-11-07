@@ -137,7 +137,17 @@ export function buildScmMenu(opts: {
       label: "Remote",
       disabled: repoBusy,
       children: [
-        { id: "addRemote", label: "Add Remote..." },
+        {
+          id: "openPullRequest",
+          label: "Create Pull Request…",
+          disabled: history,
+        },
+        {
+          id: "openRemoteBranch",
+          label: "Open Branch on Remote…",
+          disabled: history,
+        },
+        { id: "addRemote", label: "Add Remote...", separatorBefore: true },
         { id: "removeRemote", label: "Remove Remote..." },
       ],
     },

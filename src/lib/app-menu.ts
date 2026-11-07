@@ -34,6 +34,7 @@ export interface MenuSnapshot {
   wordWrap: boolean;
   minimap: boolean;
   sidebarVisible: boolean;
+  chatVisible: boolean;
   panelVisible: boolean;
 }
 
@@ -280,6 +281,7 @@ export function buildAppMenus(snap: MenuSnapshot): TopMenu[] {
           item("view.run", "Run and Debug"),
           item("view.extensions", "Extensions"),
           item("view.history", "Vigil History"),
+          item("view.browser", "Vigil Browser"),
           sep(),
           item("view.problems", "Problems"),
           item("view.output", "Output"),
@@ -299,6 +301,12 @@ export function buildAppMenus(snap: MenuSnapshot): TopMenu[] {
           item("view.sidebar", "Toggle Primary Side Bar", { mod: true, key: "b", label: "B" }, {
             checked: snap.sidebarVisible,
           }),
+          item(
+            "view.chat",
+            "Toggle Chat",
+            { mod: true, alt: true, key: "b", label: "B" },
+            { checked: snap.chatVisible },
+          ),
           item("view.panel", "Toggle Panel", { mod: true, key: "j", label: "J" }, {
             checked: snap.panelVisible,
           }),
@@ -320,6 +328,7 @@ export function buildAppMenus(snap: MenuSnapshot): TopMenu[] {
         item("view.run", "Run", { mod: true, shift: true, key: "d", label: "D" }),
         item("view.extensions", "Extensions", { mod: true, shift: true, key: "x", label: "X" }),
         item("view.history", "Vigil History"),
+        item("view.browser", "Vigil Browser"),
         sep(),
         item("view.problems", "Problems", { mod: true, shift: true, key: "m", label: "M" }),
         item("view.output", "Output", { mod: true, shift: true, key: "u", label: "U" }),

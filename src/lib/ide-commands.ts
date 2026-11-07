@@ -51,8 +51,12 @@ export function onMenuMessage(fn: (message: string) => void) {
   };
 }
 
-function toast(message: string) {
+export function notify(message: string) {
   for (const fn of messageListeners) fn(message);
+}
+
+function toast(message: string) {
+  notify(message);
 }
 
 let openPicker: (mode: "commands" | "files") => void = () => {};
@@ -408,6 +412,13 @@ export async function runCommand(id: string): Promise<void> {
       case "view.history":
         showView("history");
         return;
+      case "view.browser": {
+        const { detectProjectPreviewUrl } = await import("./project-url");
+        const root = useExplorerStore.getState().root;
+        const hint = await detectProjectPreviewUrl(root);
+        useEditorTabsStore.getState().openBrowser(hint ?? "");
+        return;
+      }
       case "view.problems":
         useLayoutStore.getState().setBottomTab("problems");
         return;
@@ -424,6 +435,9 @@ export async function runCommand(id: string): Promise<void> {
       }
       case "view.sidebar":
         useLayoutStore.getState().toggleSidebar();
+        return;
+      case "view.chat":
+        useLayoutStore.getState().toggleChat();
         return;
       case "view.panel":
         useLayoutStore.getState().toggleBottom();

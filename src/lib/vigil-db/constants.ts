@@ -19,6 +19,8 @@ export interface ChatSessionDoc {
   messages: unknown[];
   archived: boolean;
   draft?: string;
+  /** Set when the user renames the tab. Auto titles stay unlocked. */
+  titleCustom?: boolean;
   createdAt: number;
   updatedAt: number;
 }

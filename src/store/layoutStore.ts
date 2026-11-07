@@ -1,10 +1,14 @@
 import { create } from "zustand";
 import {
+  CHAT_VISIBLE_KEY,
   DEFAULT_LAYOUT,
   loadLayoutSizes,
+  loadPaneVisible,
   loadTerminalHeightPx,
   saveLayoutSizes,
+  savePaneVisible,
   saveTerminalHeightPx,
+  SIDEBAR_VISIBLE_KEY,
   type LayoutSizes,
 } from "../lib/layout-persist";
 
@@ -21,6 +25,7 @@ export type BottomTab = "terminal" | "problems" | "output";
 interface LayoutState {
   sidebarView: SidebarView;
   sidebarVisible: boolean;
+  chatVisible: boolean;
   bottomVisible: boolean;
   bottomTab: BottomTab;
   bottomHeight: number;
@@ -29,6 +34,7 @@ interface LayoutState {
   setSidebarView: (view: SidebarView) => void;
   showSidebar: (view: SidebarView) => void;
   toggleSidebar: () => void;
+  toggleChat: () => void;
   toggleBottom: () => void;
   setBottomTab: (tab: BottomTab) => void;
   setBottomHeight: (h: number) => void;
@@ -41,20 +47,36 @@ interface LayoutState {
 
 export const useLayoutStore = create<LayoutState>((set) => ({
   sidebarView: "explorer",
-  sidebarVisible: true,
+  sidebarVisible: loadPaneVisible(SIDEBAR_VISIBLE_KEY, true),
+  chatVisible: loadPaneVisible(CHAT_VISIBLE_KEY, true),
   bottomVisible: true,
   bottomTab: "terminal",
   bottomHeight: loadTerminalHeightPx(220),
   chatWidth: 360,
   layoutSizes: loadLayoutSizes(),
   setSidebarView: (sidebarView) =>
-    set((s) => ({
-      sidebarView,
-      sidebarVisible:
-        s.sidebarView === sidebarView ? !s.sidebarVisible : true,
-    })),
-  showSidebar: (sidebarView) => set({ sidebarView, sidebarVisible: true }),
-  toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
+    set((s) => {
+      const sidebarVisible =
+        s.sidebarView === sidebarView ? !s.sidebarVisible : true;
+      savePaneVisible(SIDEBAR_VISIBLE_KEY, sidebarVisible);
+      return { sidebarView, sidebarVisible };
+    }),
+  showSidebar: (sidebarView) => {
+    savePaneVisible(SIDEBAR_VISIBLE_KEY, true);
+    set({ sidebarView, sidebarVisible: true });
+  },
+  toggleSidebar: () =>
+    set((s) => {
+      const sidebarVisible = !s.sidebarVisible;
+      savePaneVisible(SIDEBAR_VISIBLE_KEY, sidebarVisible);
+      return { sidebarVisible };
+    }),
+  toggleChat: () =>
+    set((s) => {
+      const chatVisible = !s.chatVisible;
+      savePaneVisible(CHAT_VISIBLE_KEY, chatVisible);
+      return { chatVisible };
+    }),
   toggleBottom: () => set((s) => ({ bottomVisible: !s.bottomVisible })),
   setBottomTab: (bottomTab) => set({ bottomTab, bottomVisible: true }),
   setBottomHeight: (bottomHeight) => {
@@ -92,6 +114,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     set({
       layoutSizes: loadLayoutSizes(),
       bottomHeight: loadTerminalHeightPx(220),
+      sidebarVisible: loadPaneVisible(SIDEBAR_VISIBLE_KEY, true),
+      chatVisible: loadPaneVisible(CHAT_VISIBLE_KEY, true),
     });
   },
 }));

@@ -36,6 +36,7 @@ commands.allow = [
   "delete_path",
   "rename_path",
   "run_workspace_command",
+  "start_workspace_command",
   "git_repo_info",
   "git_has_commits",
   "git_create_branch",

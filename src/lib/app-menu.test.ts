@@ -13,6 +13,7 @@ const snap = {
   wordWrap: false,
   minimap: true,
   sidebarVisible: true,
+  chatVisible: true,
   panelVisible: false,
 };
 

@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { ScmMenuItem } from "../../../lib/scm-menu";
 
+export type ScmPickOption = {
+  id: string;
+  label: string;
+  detail?: string;
+  /** Tab id when the picker uses Local / Origin groups. */
+  group?: string;
+};
+
 export type ScmPromptRequest =
   | {
       kind: "input";
@@ -12,8 +20,13 @@ export type ScmPromptRequest =
   | {
       kind: "pick";
       title: string;
-      options: { id: string; label: string; detail?: string }[];
+      options: ScmPickOption[];
+      /** Tabs under the filter (e.g. Local / Origin). */
+      groups?: { id: string; label: string }[];
+      defaultGroup?: string;
       allowCustom?: boolean;
+      /** How free-text Enter is sent — checkout uses commit:, create-from uses raw ref. */
+      customKind?: "raw" | "commit";
       empty?: string;
     }
   | {
@@ -158,6 +171,14 @@ export function ScmPromptDialog({
     request.kind === "input" ? (request.initial ?? "") : "",
   );
   const [filter, setFilter] = useState("");
+  const [groupId, setGroupId] = useState(() => {
+    if (request.kind !== "pick") return "";
+    return (
+      request.defaultGroup ||
+      request.groups?.[0]?.id ||
+      ""
+    );
+  });
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -167,13 +188,20 @@ export function ScmPromptDialog({
     return () => document.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
+  const pickGroups = request.kind === "pick" ? request.groups ?? [] : [];
+  const activeGroup = pickGroups.length > 0 ? groupId || pickGroups[0]!.id : "";
+
   const options =
     request.kind === "pick"
       ? request.options.filter((option) => {
+          if (activeGroup && (option.group ?? "local") !== activeGroup) {
+            return false;
+          }
           const q = filter.trim().toLowerCase();
           if (!q) return true;
           return (
             option.label.toLowerCase().includes(q) ||
+            option.id.toLowerCase().includes(q) ||
             (option.detail ?? "").toLowerCase().includes(q)
           );
         })
@@ -187,6 +215,10 @@ export function ScmPromptDialog({
     !request.options.some(
       (option) => option.label === custom || option.id === custom,
     );
+  const customValue =
+    request.kind === "pick" && request.customKind === "commit"
+      ? `commit:${custom}`
+      : custom;
 
   return (
     <div
@@ -273,17 +305,39 @@ export function ScmPromptDialog({
               onChange={(event) => setFilter(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
-                  if (showCustom) onConfirm(`commit:${custom}`);
+                  if (showCustom) onConfirm(customValue);
                   else if (options[0]) onConfirm(options[0].id);
                 }
               }}
               className="mx-2 mb-1 w-[calc(100%-16px)] rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1 text-[12px] outline-none"
             />
+            {pickGroups.length > 0 && (
+              <div className="mx-2 mb-1 flex gap-1 border-b border-[var(--vigil-border)] pb-1">
+                {pickGroups.map((group) => (
+                  <button
+                    key={group.id}
+                    type="button"
+                    className={`rounded px-2 py-0.5 text-[11px] ${
+                      activeGroup === group.id
+                        ? "bg-[var(--vigil-accent)] text-white"
+                        : "hover:bg-[var(--vigil-hover)]"
+                    }`}
+                    onClick={() => setGroupId(group.id)}
+                  >
+                    {group.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="max-h-64 overflow-auto">
               {showCustom && (
                 <PickRow
-                  label={`Checkout '${custom}'`}
-                  onClick={() => onConfirm(`commit:${custom}`)}
+                  label={
+                    request.customKind === "commit"
+                      ? `Checkout '${custom}'`
+                      : `Use '${custom}'`
+                  }
+                  onClick={() => onConfirm(customValue)}
                 />
               )}
               {options.map((option) => (

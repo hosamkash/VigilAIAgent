@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { ApiKeyProvider, AuthMode } from "../lib/secure-storage";
 import {
   hasApiKey,
+  isDeviceAuthEnabled,
   listConfiguredProviders,
   lockSettingsGate,
   saveApiKey,
@@ -31,6 +32,22 @@ interface SettingsState {
   refreshConfigured: () => Promise<void>;
   saveKey: (provider: ApiKeyProvider, key: string) => Promise<void>;
   checkKey: (provider: ApiKeyProvider) => Promise<boolean>;
+}
+
+async function openSettingsWithoutDeviceAuth(
+  set: (
+    partial:
+      | Partial<SettingsState>
+      | ((s: SettingsState) => Partial<SettingsState>),
+  ) => void,
+): Promise<void> {
+  await unlockSettingsGate().catch(() => undefined);
+  set({
+    view: "settings",
+    settingsUnlocked: true,
+    unlocking: false,
+    unlockError: null,
+  });
 }
 
 async function finishUnlockAttempt(
@@ -111,6 +128,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   status: null,
 
   openSettingsGate: () => {
+    if (!isDeviceAuthEnabled()) {
+      void openSettingsWithoutDeviceAuth(set);
+      return;
+    }
     set({
       view: "settings-locked",
       settingsUnlocked: false,
@@ -142,6 +163,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   requestSettingsAccess: async (mode: AuthMode = "biometrics") => {
+    if (!isDeviceAuthEnabled()) {
+      await openSettingsWithoutDeviceAuth(set);
+      return;
+    }
     if (get().unlocking) return;
     if (get().settingsUnlocked && get().view === "settings") return;
 
@@ -170,6 +195,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   unlockWithDevicePassword: async (password: string) => {
+    if (!isDeviceAuthEnabled()) {
+      await openSettingsWithoutDeviceAuth(set);
+      return;
+    }
     if (get().unlocking) return;
     if (get().settingsUnlocked && get().view === "settings") return;
 

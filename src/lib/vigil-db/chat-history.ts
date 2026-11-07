@@ -20,6 +20,7 @@ function asSession(
     messages,
     archived: Boolean(data.archived),
     draft: data.draft != null ? String(data.draft) : "",
+    titleCustom: Boolean(data.titleCustom),
     createdAt,
     updatedAt,
   };
@@ -54,6 +55,7 @@ export async function upsertChatSessionDoc(
     messages: Array.isArray(doc.messages) ? doc.messages : [],
     archived: Boolean(doc.archived),
     draft: doc.draft ?? "",
+    titleCustom: Boolean(doc.titleCustom),
     createdAt: doc.createdAt ?? now,
     updatedAt: doc.updatedAt ?? now,
   };

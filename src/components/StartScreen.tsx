@@ -21,6 +21,7 @@ import {
   credentialHostFromBase,
   forgetGitHost,
   hostMeta,
+  isGitAuthFailure,
   listHostRepos,
   listSavedGitHosts,
   readGitToken,
@@ -131,19 +132,23 @@ export function StartScreen() {
     }
   }
 
-  async function connectWithSecret(secret: string) {
+  async function connectWithSecret(
+    secret: string,
+    override?: { host?: GitHostId; baseUrl?: string },
+  ) {
     const value = secret.trim();
     if (!value || connecting.current) return;
+    const id = override?.host ?? hostId;
     connecting.current = true;
     setBusy(true);
     setError(null);
     try {
-      const meta = hostMeta(hostId);
-      const base = (baseUrl || meta.defaultBase).trim();
+      const meta = hostMeta(id);
+      const base = (override?.baseUrl ?? (baseUrl || meta.defaultBase || "")).trim();
       if (!base) throw new Error("Enter the host URL");
-      const verified = await verifyGitHost(hostId, base, value);
+      const verified = await verifyGitHost(id, base, value);
       const profile: GitHostProfile = {
-        host: hostId,
+        host: id,
         baseUrl: base.replace(/\/$/, ""),
         login: verified.login,
         credentialUser: meta.credentialUser,
@@ -161,7 +166,7 @@ export function StartScreen() {
       setToken("");
       setBrowserWait(false);
       setActiveHost(profile);
-      setRepos(await listHostRepos(hostId, profile.baseUrl, value));
+      setRepos(await listHostRepos(id, profile.baseUrl, value));
       reloadLists();
       setStep("repos");
     } catch (err) {
@@ -181,15 +186,20 @@ export function StartScreen() {
     }
   }
 
-  async function signInWithBrowser() {
+  async function signInWithBrowser(overrideHost?: GitHostId) {
+    const id = overrideHost ?? hostId;
+    setHostId(id);
     setError(null);
     setNote(null);
-    if (hostId === "github") {
+    if (id === "github") {
       setBusy(true);
       setBrowserWait(true);
       try {
         const secret = await githubBrowserLogin();
-        await connectWithSecret(secret);
+        await connectWithSecret(secret, {
+          host: "github",
+          baseUrl: hostMeta("github").defaultBase,
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -198,12 +208,12 @@ export function StartScreen() {
       }
       return;
     }
-    const existing = await existingCliToken(hostId).catch(() => null);
+    const existing = await existingCliToken(id).catch(() => null);
     if (existing) {
-      await connectWithSecret(existing);
+      await connectWithSecret(existing, { host: id });
       return;
     }
-    const url = browserSignInUrl(hostId, baseUrl);
+    const url = browserSignInUrl(id, baseUrl || hostMeta(id).defaultBase);
     if (!url) {
       setError("Enter the host URL, then paste a token.");
       return;
@@ -236,14 +246,33 @@ export function StartScreen() {
   async function browseHost(profile: GitHostProfile) {
     setBusy(true);
     setError(null);
+    setNote(null);
     setActiveHost(profile);
     try {
       const secret = await readGitToken(profile.host);
       setRepos(await listHostRepos(profile.host, profile.baseUrl, secret));
       setStep("repos");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setStep("home");
+      if (isGitAuthFailure(err)) {
+        await forgetGitHost(profile.host).catch(() => undefined);
+        reloadLists();
+        setActiveHost(null);
+        setHostId(profile.host);
+        setBaseUrl(profile.baseUrl || hostMeta(profile.host).defaultBase);
+        setToken("");
+        setBrowserWait(false);
+        setError(null);
+        setNote("Previous sign-in expired. Sign in again to continue.");
+        setStep("connect");
+        if (profile.host === "github") {
+          setBusy(false);
+          await signInWithBrowser("github");
+          return;
+        }
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+        setStep("home");
+      }
     } finally {
       setBusy(false);
     }

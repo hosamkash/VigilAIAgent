@@ -15,9 +15,12 @@ import {
   gitDeleteTag,
   gitDiscardAll,
   gitFetch,
+  gitGetRemoteUrl,
   gitListBranches,
+  gitListRecentCommits,
   gitListRemoteBranches,
   gitListRemotes,
+  gitPreferredRemoteName,
   gitListStashes,
   gitListTags,
   gitListWorktrees,
@@ -47,6 +50,8 @@ import {
   type GitStatus,
 } from "../../../lib/git";
 import type { ChangeSort, ChangeView } from "../../../lib/scm-view";
+import { buildRemotePageUrl } from "../../../lib/git-remote-web";
+import { openTerminalUrl } from "../../../lib/terminal-links";
 import type { ScmPromptRequest } from "./ScmMenu";
 
 type Attempt = (
@@ -159,22 +164,31 @@ export async function runScmCommand(
         kind: "pick",
         title: "Checkout to...",
         allowCustom: true,
+        customKind: "commit",
+        groups: [
+          { id: "local", label: "Local" },
+          { id: "origin", label: "Origin" },
+        ],
+        defaultGroup: "local",
         empty: "No branches or tags",
         options: [
           ...locals.map((branch) => ({
             id: `branch:${branch}`,
             label: branch,
             detail: "branch",
-          })),
-          ...remotes.map((branch) => ({
-            id: `remote:${branch}`,
-            label: branch,
-            detail: "remote",
+            group: "local",
           })),
           ...tags.map((tag) => ({
             id: `tag:${tag}`,
             label: tag,
             detail: "tag",
+            group: "local",
+          })),
+          ...remotes.map((branch) => ({
+            id: `remote:${branch}`,
+            label: branch,
+            detail: "remote",
+            group: "origin",
           })),
         ],
       });
@@ -290,24 +304,50 @@ export async function runScmCommand(
     case "deleteBranch":
     case "deleteRemoteBranch": {
       if (id === "createBranchFrom") {
-        const [locals, remotes] = await Promise.all([
+        const [locals, remotes, commits] = await Promise.all([
           gitListBranches(root),
           gitListRemoteBranches(root),
+          gitListRecentCommits(root, 40),
         ]);
+        const localSet = new Set(locals);
         const from = await ask({
           kind: "pick",
           title: "Create Branch From...",
-          empty: "No branches",
+          allowCustom: true,
+          customKind: "raw",
+          groups: [
+            { id: "local", label: "Local" },
+            { id: "origin", label: "Origin" },
+          ],
+          defaultGroup: "local",
+          empty: "No branches or commits",
           options: [
             ...locals.map((branch) => ({
               id: branch,
               label: branch,
-              detail: "local",
+              detail: "branch",
+              group: "local",
             })),
+            // Commits that aren't already covered by a local branch tip — Graph
+            // often shows a message like "01-Start-App-2" that isn't a live ref.
+            ...commits
+              .filter(
+                (commit) => !commit.refs.some((ref) => localSet.has(ref)),
+              )
+              .map((commit) => ({
+                id: `commit:${commit.hash}`,
+                label: commit.message || commit.shortHash,
+                detail:
+                  commit.refs.length > 0
+                    ? `${commit.shortHash} · ${commit.refs.slice(0, 2).join(", ")}`
+                    : commit.shortHash,
+                group: "local",
+              })),
             ...remotes.map((branch) => ({
               id: branch,
               label: branch,
               detail: "remote",
+              group: "origin",
             })),
           ],
         });
@@ -324,10 +364,13 @@ export async function runScmCommand(
           setUiError(valid.error ?? "Invalid branch name");
           return;
         }
+        const startPoint = from.startsWith("commit:")
+          ? from.slice("commit:".length)
+          : from;
         await attempt("Creating branch…", () =>
           gitCreateBranch(root, valid.suggested ?? name, {
             checkout: true,
-            startPoint: from,
+            startPoint,
           }),
         );
         return;
@@ -441,6 +484,32 @@ export async function runScmCommand(
             ? gitCreateBranch(root, next, { checkout: true })
             : gitRenameBranch(root, next),
       );
+      return;
+    }
+    case "openPullRequest":
+    case "openRemoteBranch": {
+      const branch = status?.branch?.trim();
+      if (!branch || branch === "HEAD") {
+        setUiError("Checkout a named branch first");
+        return;
+      }
+      const preferred = gitPreferredRemoteName(status?.upstream);
+      let remoteUrl = await gitGetRemoteUrl(root, preferred);
+      if (!remoteUrl && preferred !== "origin") {
+        remoteUrl = await gitGetRemoteUrl(root, "origin");
+      }
+      if (!remoteUrl) {
+        setUiError("No remote URL found — add origin first");
+        return;
+      }
+      try {
+        const mode = id === "openPullRequest" ? "pr" : "branch";
+        const { href } = buildRemotePageUrl(remoteUrl, branch, mode);
+        const opened = await openTerminalUrl(href);
+        if (!opened) setUiError(`Could not open ${href}`);
+      } catch (err) {
+        setUiError(err instanceof Error ? err.message : String(err));
+      }
       return;
     }
     case "addRemote": {

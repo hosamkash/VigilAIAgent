@@ -1,5 +1,10 @@
 import { create } from "zustand";
+import { browserTabTitle } from "../lib/browser-url";
 import { basename, languageFromPath } from "../lib/workspace-fs";
+
+function browserTitle(url: string): string {
+  return url ? browserTabTitle(url) : "Vigil Browser";
+}
 
 export interface ExtensionTabMeta {
   extensionId: string;
@@ -16,6 +21,10 @@ export interface GitDiffMeta {
   conflicted: boolean;
 }
 
+export interface BrowserTabMeta {
+  url: string;
+}
+
 export interface EditorTab {
   id: string;
   path: string;
@@ -25,10 +34,11 @@ export interface EditorTab {
   original: string;
   dirty: boolean;
   pinned: boolean;
-  mode: "file" | "diff" | "extension";
+  mode: "file" | "diff" | "extension" | "browser";
   revealLine?: number;
   extension?: ExtensionTabMeta;
   gitDiff?: GitDiffMeta;
+  browser?: BrowserTabMeta;
 }
 
 interface EditorTabsState {
@@ -45,6 +55,8 @@ interface EditorTabsState {
     revealLine?: number;
   }) => void;
   openExtension: (meta: ExtensionTabMeta) => void;
+  openBrowser: (url?: string) => void;
+  updateBrowserUrl: (id: string, url: string, title?: string) => void;
   closeTab: (id: string) => void;
   closeAll: () => void;
   setActive: (id: string) => void;
@@ -224,6 +236,77 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
   },
+  openBrowser: (url = "") => {
+    let normalized = url.trim();
+    if (normalized) {
+      // Keep store URL canonical so BrowserView always sees a real href.
+      if (
+        normalized.startsWith("localhost") ||
+        normalized.startsWith("127.") ||
+        /^\d{1,3}(\.\d{1,3}){3}/.test(normalized)
+      ) {
+        normalized = normalized.includes("://")
+          ? normalized
+          : `http://${normalized}`;
+      } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalized)) {
+        normalized = `https://${normalized}`;
+      }
+    }
+    const tabs = get().tabs;
+    const active = tabs.find((t) => t.id === get().activeId);
+    const reuse =
+      (active?.mode === "browser" ? active : undefined) ??
+      tabs.find((t) => t.mode === "browser");
+
+    if (reuse) {
+      if (!normalized) {
+        set({ activeId: reuse.id });
+        return;
+      }
+      set((s) => ({
+        activeId: reuse.id,
+        tabs: s.tabs.map((t) =>
+          t.id === reuse.id
+            ? {
+                ...t,
+                browser: { url: normalized },
+                title: browserTitle(normalized),
+                path: `browser:${normalized}`,
+              }
+            : t,
+        ),
+      }));
+      return;
+    }
+
+    const id = crypto.randomUUID();
+    const tab: EditorTab = {
+      id,
+      path: normalized ? `browser:${normalized}` : `browser:${id}`,
+      title: normalized ? browserTitle(normalized) : "Vigil Browser",
+      language: "plaintext",
+      content: "",
+      original: "",
+      dirty: false,
+      pinned: false,
+      mode: "browser",
+      browser: { url: normalized },
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+  },
+  updateBrowserUrl: (id, url, title) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === id && t.mode === "browser"
+          ? {
+              ...t,
+              browser: { url },
+              title: title || browserTitle(url) || t.title,
+              path: `browser:${url || t.id}`,
+            }
+          : t,
+      ),
+    })),
   showAgentDiff: (path, original, modified) => {
     const id = `diff:${path}`;
     const existing = get().tabs.find((t) => t.id === id);

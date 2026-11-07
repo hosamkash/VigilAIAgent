@@ -78,28 +78,58 @@ function oneLine(text: string): string {
     ?? "";
 }
 
+/** Subject + optional body — clear, not a one-word stub. */
+export function normalizeCommitMessage(text: string): string {
+  let raw = text.trim();
+  if (raw.startsWith("```")) {
+    raw = raw.replace(/^```[\w]*\n?/, "").replace(/\n?```\s*$/, "");
+  }
+  const lines = raw
+    .split("\n")
+    .map((l) => l.replace(/^["']|["']$/g, "").trimEnd());
+  while (lines.length && !lines[0]!.trim()) lines.shift();
+  while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop();
+  if (!lines.length) return "";
+
+  const subject = lines[0]!.trim().replace(/^#+\s*/, "").slice(0, 100);
+  const bodyLines = lines
+    .slice(1)
+    .map((l) => l.trim())
+    .filter((l, i, arr) => l.length > 0 || (i > 0 && arr[i - 1]!.length > 0));
+  // Drop a leading blank after subject, then keep up to ~6 body lines.
+  while (bodyLines[0] === "") bodyLines.shift();
+  const body = bodyLines.slice(0, 8).join("\n").trim();
+  return body ? `${subject}\n\n${body}` : subject;
+}
+
 export async function generateCommitMessage(diff: string): Promise<{
   message: string;
   model: string;
 }> {
-  const clipped = diff.slice(0, 12_000);
+  const clipped = diff.slice(0, 14_000);
   if (!clipped.trim()) {
     return {
       message: "Initial commit: Project setup",
       model: "local",
     };
   }
-  const prompt = `You write conventional commit messages.
-Given this git diff, reply with ONLY one commit message line.
-Format: type(scope): summary
-Types: feat, fix, docs, style, refactor, test, chore, build, ci
-Keep under 72 chars. No quotes, no explanation.
+  const prompt = `You write clear git commit messages for developers.
+Reply with ONLY the commit message — no markdown fences, no quotes, no preamble.
+
+Format:
+1) First line: conventional commit subject
+   type(scope): plain-English summary of what changed
+   Types: feat, fix, docs, style, refactor, test, chore, build, ci
+   Subject ≤ 72 characters, specific (not "update files" / "fixes").
+2) Blank line
+3) Body: 2–4 short lines explaining what changed and why (simple language).
+   Prefer bullets starting with "- ".
 
 DIFF:
 ${clipped}`;
 
-  const { text, model } = await geminiComplete(prompt, { maxTokens: 80 });
-  const message = oneLine(text).slice(0, 100);
+  const { text, model } = await geminiComplete(prompt, { maxTokens: 320 });
+  const message = normalizeCommitMessage(text);
   return {
     message: message || "chore: update project files",
     model,

@@ -3,6 +3,7 @@ import { browserSignInUrl, tokenFromClipboard } from "./git-oauth";
 import {
   azureAuthorization,
   credentialHostFromBase,
+  isGitAuthFailure,
   repoFolderName,
   safeProjectName,
 } from "./git-hosts";
@@ -50,4 +51,15 @@ describe("git host helpers", () => {
     expect(azureAuthorization("header.payload.sig")).toBe("Bearer header.payload.sig");
     expect(azureAuthorization("personal-token")).toMatch(/^Basic /);
   });
+
+  it("detects expired Git host credentials", () => {
+    expect(isGitAuthFailure(new Error('{"message":"Bad credentials","status":"401"}'))).toBe(
+      true,
+    );
+    expect(isGitAuthFailure(new Error("GitHub sign-in expired or was revoked. Sign in again."))).toBe(
+      true,
+    );
+    expect(isGitAuthFailure(new Error("network down"))).toBe(false);
+  });
 });
+

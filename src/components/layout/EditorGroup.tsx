@@ -4,8 +4,11 @@ import { useEditorTabsStore } from "../../store/editorTabsStore";
 import { useThemeStore, getTheme } from "../../store/themeStore";
 import { runCommand } from "../../lib/ide-commands";
 import { setMonacoBridge } from "../../lib/monaco-bridge";
+import { useEditorStatusStore } from "../../store/editorStatusStore";
 import { ExtensionDetailView } from "../ExtensionDetailView";
+import { BrowserView } from "../BrowserView";
 import { destroyExtHostWebview } from "../../lib/embedded-site";
+import { destroyVigilEmbedWebview } from "../../lib/vigil-embed-webview";
 import { GitDiffBar } from "./GitDiffBar";
 import { StartScreen } from "../StartScreen";
 import { useExplorerStore } from "../../store/explorerStore";
@@ -29,14 +32,27 @@ export function EditorGroup() {
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const revealDone = useRef<string | null>(null);
 
-  // Kill any leftover native ext-host webview that was covering the UI
+  // Kill leftover native webviews that would cover the UI when not browsing.
   useEffect(() => {
     void destroyExtHostWebview();
+    if (active?.mode !== "browser") {
+      void destroyVigilEmbedWebview();
+    }
   }, [activeId, active?.mode]);
 
   useEffect(() => {
-    if (active?.mode !== "file") setMonacoBridge(null);
+    if (active?.mode !== "file") {
+      setMonacoBridge(null);
+      useEditorStatusStore.getState().clear();
+    }
   }, [active?.id, active?.mode]);
+
+  useEffect(() => {
+    return () => {
+      setMonacoBridge(null);
+      useEditorStatusStore.getState().clear();
+    };
+  }, []);
 
   const onMount: OnMount = (editor) => {
     setMonacoBridge({
@@ -44,7 +60,37 @@ export function EditorGroup() {
         void editor.trigger("menu", command, null);
         editor.focus();
       },
+      readSelection: () => {
+        const model = editor.getModel();
+        const selection = editor.getSelection();
+        if (!model || !selection || selection.isEmpty()) return "";
+        return model.getValueInRange(selection);
+      },
+      insert: (text) => {
+        const selection = editor.getSelection();
+        if (!selection) return false;
+        editor.executeEdits("clip-shelf", [
+          { range: selection, text, forceMoveMarkers: true },
+        ]);
+        editor.focus();
+        return true;
+      },
     });
+    const publish = () => {
+      const pos = editor.getPosition();
+      const model = editor.getModel();
+      if (!pos || !model) return;
+      useEditorStatusStore.getState().setCaret({
+        line: pos.lineNumber,
+        column: pos.column,
+        tabSize: model.getOptions().tabSize,
+        insertSpaces: model.getOptions().insertSpaces,
+        eol: model.getEOL() === "\r\n" ? "CRLF" : "LF",
+      });
+    };
+    editor.onDidChangeCursorPosition(publish);
+    editor.onDidChangeModelContent(publish);
+    publish();
     if (!active?.revealLine) return;
     const key = `${active.id}:${active.revealLine}`;
     if (revealDone.current === key) return;
@@ -127,7 +173,7 @@ export function EditorGroup() {
         </div>
       </div>
 
-      {active && active.mode !== "extension" && (
+      {active && active.mode !== "extension" && active.mode !== "browser" && (
         <div className="flex h-6 shrink-0 items-center gap-1 overflow-hidden border-b border-[var(--vigil-border-soft)] px-3 text-[11px] text-[var(--vigil-muted)]">
           {crumbs.map((c, i) => (
             <span key={`${c}-${i}`} className="flex items-center gap-1">
@@ -154,6 +200,13 @@ export function EditorGroup() {
           <ExtensionDetailView
             key={active.extension.extensionId}
             meta={active.extension}
+          />
+        )}
+        {active?.mode === "browser" && (
+          <BrowserView
+            key={active.id}
+            tabId={active.id}
+            initialUrl={active.browser?.url ?? ""}
           />
         )}
         {active?.mode === "file" && (

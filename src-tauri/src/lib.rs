@@ -1,6 +1,6 @@
 //! Vigil AI Agent — Rust backend.
 //! Frontend talks to Rust only. Rust talks to Node sidecar with HMAC-signed IPC.
-//! API keys live in the OS keychain via the `keyring` crate (never plaintext / localStorage).
+//! API keys live in a local app-support file (not Keychain) while device auth is off.
 
 mod biometric;
 mod dictate;
@@ -13,22 +13,75 @@ use keyring::Entry;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 type HmacSha256 = Hmac<Sha256>;
 
 pub(crate) const KEYRING_SERVICE: &str = "com.vigil.agent";
 const SIDECAR_PORT: u16 = 47821;
 
-/// Set ONLY after Touch ID succeeds for Settings. Cleared on lock/deny.
-static SETTINGS_GATE_OPEN: AtomicBool = AtomicBool::new(false);
+/// Mirror of frontend `DEVICE_AUTH_ENABLED`. Off until account login ships —
+/// no Touch ID / password prompts; settings gate stays open.
+const DEVICE_AUTH_ENABLED: bool = false;
+
+/// Set ONLY after Touch ID succeeds for Settings (when DEVICE_AUTH_ENABLED).
+/// While device auth is off, starts open and stays open.
+static SETTINGS_GATE_OPEN: AtomicBool = AtomicBool::new(!DEVICE_AUTH_ENABLED);
+
+/// Session cache so macOS Keychain is not hit on every chat turn.
+static API_KEY_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn api_key_cache() -> &'static Mutex<HashMap<String, String>> {
+    API_KEY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn api_keys_file_path() -> PathBuf {
+    app_support_dir().join("api_keys.json")
+}
+
+fn read_api_keys_file() -> HashMap<String, String> {
+    let Ok(raw) = fs::read_to_string(api_keys_file_path()) else {
+        return HashMap::new();
+    };
+    serde_json::from_str::<HashMap<String, String>>(&raw).unwrap_or_default()
+}
+
+fn write_api_keys_file(map: &HashMap<String, String>) -> Result<(), VigilError> {
+    let dir = app_support_dir();
+    fs::create_dir_all(&dir).map_err(|e| VigilError::Message(e.to_string()))?;
+    let raw = serde_json::to_string_pretty(map)
+        .map_err(|e| VigilError::Message(e.to_string()))?;
+    fs::write(api_keys_file_path(), raw).map_err(|e| VigilError::Message(e.to_string()))
+}
+
+fn put_api_key_file(provider: &str, api_key: &str) -> Result<(), VigilError> {
+    let mut map = read_api_keys_file();
+    map.insert(provider.to_string(), api_key.to_string());
+    write_api_keys_file(&map)
+}
+
+fn remove_api_key_file(provider: &str) -> Result<(), VigilError> {
+    let mut map = read_api_keys_file();
+    if map.remove(provider).is_some() {
+        write_api_keys_file(&map)?;
+    }
+    Ok(())
+}
+
+fn cache_api_key(provider: &str, api_key: &str) {
+    if let Ok(mut guard) = api_key_cache().lock() {
+        guard.insert(provider.to_string(), api_key.to_string());
+    }
+}
 
 struct LaunchSecret {
     session_id: String,
@@ -73,6 +126,8 @@ impl serde::Serialize for VigilError {
 struct SidecarState {
     secret_hex: String,
     child: Mutex<Option<Child>>,
+    /// mtime of sidecar entry script when last spawned — restart if source changed.
+    script_mtime_ms: Mutex<Option<u128>>,
 }
 
 fn validate_provider(provider: &str) -> Result<(), VigilError> {
@@ -146,13 +201,37 @@ fn unmark_provider_configured(provider: &str) -> Result<(), VigilError> {
     write_configured_meta(&list)
 }
 
-fn read_keyring(provider: &str) -> Result<String, VigilError> {
+/// API keys: local file + memory only. Never touch macOS Keychain / Windows Credential
+/// Manager for provider keys while device auth is off (any Keychain ACL pops a password UI).
+fn read_api_key_store(provider: &str) -> Result<String, VigilError> {
     validate_provider(provider)?;
-    let entry = Entry::new(KEYRING_SERVICE, &provider_account(provider))
-        .map_err(|e| VigilError::Message(e.to_string()))?;
-    entry
-        .get_password()
-        .map_err(|e| VigilError::Message(e.to_string()))
+    if let Ok(guard) = api_key_cache().lock() {
+        if let Some(cached) = guard.get(provider) {
+            return Ok(cached.clone());
+        }
+    }
+
+    if let Some(from_file) = read_api_keys_file().get(provider).cloned() {
+        if !from_file.is_empty() {
+            cache_api_key(provider, &from_file);
+            return Ok(from_file);
+        }
+    }
+
+    // Device-auth on: optional Keychain fallback (off by default — never prompt today).
+    if DEVICE_AUTH_ENABLED {
+        let entry = Entry::new(KEYRING_SERVICE, &provider_account(provider))
+            .map_err(|e| VigilError::Message(e.to_string()))?;
+        let password = entry
+            .get_password()
+            .map_err(|e| VigilError::Message(e.to_string()))?;
+        cache_api_key(provider, &password);
+        return Ok(password);
+    }
+
+    Err(VigilError::Message(format!(
+        "No API key configured for {provider}. Open Settings and save the key again."
+    )))
 }
 
 #[tauri::command]
@@ -161,11 +240,21 @@ fn save_api_key(provider: String, api_key: String) -> Result<(), VigilError> {
     if api_key.trim().is_empty() {
         return Err(VigilError::Message("API key cannot be empty".into()));
     }
-    let entry = Entry::new(KEYRING_SERVICE, &provider_account(&provider))
-        .map_err(|e| VigilError::Message(e.to_string()))?;
-    entry
-        .set_password(api_key.trim())
-        .map_err(|e| VigilError::Message(e.to_string()))?;
+    let trimmed = api_key.trim().to_string();
+
+    // Always persist to the local file. Do NOT write Keychain while auth is off —
+    // set_password also triggers the system password / Touch ID dialog.
+    put_api_key_file(&provider, &trimmed)?;
+    cache_api_key(&provider, &trimmed);
+
+    if DEVICE_AUTH_ENABLED {
+        let entry = Entry::new(KEYRING_SERVICE, &provider_account(&provider))
+            .map_err(|e| VigilError::Message(e.to_string()))?;
+        entry
+            .set_password(&trimmed)
+            .map_err(|e| VigilError::Message(e.to_string()))?;
+    }
+
     mark_provider_configured(&provider)?;
     Ok(())
 }
@@ -174,17 +263,30 @@ fn save_api_key(provider: String, api_key: String) -> Result<(), VigilError> {
 #[tauri::command]
 fn has_api_key(provider: String) -> Result<bool, VigilError> {
     validate_provider(&provider)?;
-    Ok(read_configured_meta().iter().any(|p| p == &provider))
+    if read_configured_meta().iter().any(|p| p == &provider) {
+        return Ok(true);
+    }
+    Ok(read_api_keys_file()
+        .get(&provider)
+        .map(|k| !k.is_empty())
+        .unwrap_or(false))
 }
 
 #[tauri::command]
 fn delete_api_key(provider: String) -> Result<(), VigilError> {
     validate_provider(&provider)?;
-    let entry = Entry::new(KEYRING_SERVICE, &provider_account(&provider))
-        .map_err(|e| VigilError::Message(e.to_string()))?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => {}
-        Err(e) => return Err(VigilError::Message(e.to_string())),
+    let _ = remove_api_key_file(&provider);
+    if let Ok(mut guard) = api_key_cache().lock() {
+        guard.remove(&provider);
+    }
+    // Never call Keychain delete while auth is off — that dialog is what the user hates.
+    if DEVICE_AUTH_ENABLED {
+        if let Ok(entry) = Entry::new(KEYRING_SERVICE, &provider_account(&provider)) {
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(e) => return Err(VigilError::Message(e.to_string())),
+            }
+        }
     }
     unmark_provider_configured(&provider)?;
     Ok(())
@@ -203,6 +305,11 @@ fn settings_gate_open() -> bool {
 
 #[tauri::command]
 fn lock_settings_gate() {
+    if !DEVICE_AUTH_ENABLED {
+        SETTINGS_GATE_OPEN.store(true, Ordering::SeqCst);
+        println!("[vigil] settings gate stays OPEN (device auth disabled)");
+        return;
+    }
     SETTINGS_GATE_OPEN.store(false, Ordering::SeqCst);
     println!("[vigil] settings gate LOCKED");
 }
@@ -217,7 +324,7 @@ fn unlock_settings_gate() {
 /// Read API key from OS Keychain for the given provider.
 #[tauri::command]
 fn get_api_key(provider: String) -> Result<String, VigilError> {
-    read_keyring(&provider)
+    read_api_key_store(&provider)
 }
 
 #[tauri::command]
@@ -231,9 +338,18 @@ async fn authenticate_biometric(
     mode: Option<String>,
     open_settings_gate: Option<bool>,
 ) -> Result<biometric::BiometricAuthResult, VigilError> {
+    let open_gate = open_settings_gate.unwrap_or(false);
+    if !DEVICE_AUTH_ENABLED {
+        SETTINGS_GATE_OPEN.store(true, Ordering::SeqCst);
+        println!("[vigil] authenticate_biometric skipped (device auth disabled)");
+        return Ok(biometric::BiometricAuthResult {
+            authenticated: true,
+            detail: "device auth disabled".into(),
+        });
+    }
+
     let reason = reason.unwrap_or_else(|| "Unlock Vigil AI Agent".into());
     let auth_mode = biometric::AuthMode::parse(mode.as_deref());
-    let open_gate = open_settings_gate.unwrap_or(false);
     println!("[vigil] invoke authenticate_biometric reason={reason:?} mode={auth_mode:?} open_gate={open_gate}");
 
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -258,6 +374,15 @@ async fn verify_device_password(
     open_settings_gate: Option<bool>,
 ) -> Result<biometric::BiometricAuthResult, VigilError> {
     let open_gate = open_settings_gate.unwrap_or(false);
+    if !DEVICE_AUTH_ENABLED {
+        SETTINGS_GATE_OPEN.store(true, Ordering::SeqCst);
+        println!("[vigil] verify_device_password skipped (device auth disabled)");
+        return Ok(biometric::BiometricAuthResult {
+            authenticated: true,
+            detail: "device auth disabled".into(),
+        });
+    }
+
     println!("[vigil] invoke verify_device_password open_gate={open_gate}");
     let result = tauri::async_runtime::spawn_blocking(move || {
         biometric::verify_device_password(&password).map_err(VigilError::Message)
@@ -304,7 +429,8 @@ async fn get_api_key_with_biometric(
     require_biometric: Option<bool>,
 ) -> Result<String, VigilError> {
     let gate_open = SETTINGS_GATE_OPEN.load(Ordering::SeqCst);
-    let require = require_biometric.unwrap_or(true) && !gate_open;
+    let require =
+        DEVICE_AUTH_ENABLED && require_biometric.unwrap_or(true) && !gate_open;
     if require {
         let result = tauri::async_runtime::spawn_blocking(|| {
             biometric::authenticate_biometric(
@@ -322,7 +448,7 @@ async fn get_api_key_with_biometric(
             )));
         }
     }
-    read_keyring(&provider)
+    read_api_key_store(&provider)
 }
 
 /// Presence-gated key save (Layer 1), then OS vault write (Layer 2).
@@ -334,7 +460,8 @@ async fn save_api_key_with_biometric(
     require_biometric: Option<bool>,
 ) -> Result<(), VigilError> {
     let gate_open = SETTINGS_GATE_OPEN.load(Ordering::SeqCst);
-    let require = require_biometric.unwrap_or(true) && !gate_open;
+    let require =
+        DEVICE_AUTH_ENABLED && require_biometric.unwrap_or(true) && !gate_open;
     if require {
         let result = tauri::async_runtime::spawn_blocking(|| {
             biometric::authenticate_biometric(
@@ -423,7 +550,7 @@ fn get_api_key_for_sidecar(
     if !verify_sidecar_hmac(session_id, provider.clone(), signature_b64) {
         return Err(VigilError::Message("Invalid sidecar HMAC".into()));
     }
-    read_keyring(&provider)
+    read_api_key_store(&provider)
 }
 
 fn find_project_root() -> Result<PathBuf, VigilError> {
@@ -527,11 +654,59 @@ struct SpawnResult {
     pid: Option<u32>,
 }
 
+fn sidecar_scripts_mtime_ms(root: &std::path::Path) -> Option<u128> {
+    let names = ["index.mjs", "tools.mjs", "browser.mjs", "agent-stream.mjs"];
+    let mut max_ms: u128 = 0;
+    for name in names {
+        let path = root.join("sidecar").join(name);
+        let meta = fs::metadata(&path).ok()?;
+        let modified = meta.modified().ok()?;
+        let ms = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_millis();
+        if ms > max_ms {
+            max_ms = ms;
+        }
+    }
+    if max_ms == 0 {
+        None
+    } else {
+        Some(max_ms)
+    }
+}
+
+fn kill_managed_sidecar(state: &SidecarState) {
+    if let Ok(mut guard) = state.child.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    kill_port_holder(SIDECAR_PORT);
+    std::thread::sleep(Duration::from_millis(200));
+}
+
 fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError> {
     let launch = launch_secret();
+    let root = find_project_root()?;
+    let script_mtime = sidecar_scripts_mtime_ms(&root);
+    let cached_mtime = state
+        .script_mtime_ms
+        .lock()
+        .ok()
+        .and_then(|g| *g);
 
     if port_open(SIDECAR_PORT) {
-        if sidecar_accepts_secret(&state.secret_hex, &launch.session_id) {
+        let secret_ok = sidecar_accepts_secret(&state.secret_hex, &launch.session_id);
+        let code_unchanged = match (script_mtime, cached_mtime) {
+            (Some(now), Some(prev)) => now == prev,
+            // First check this launch with an already-running process — restart to
+            // pick up sidecar source edits (browser tools, etc.).
+            (Some(_), None) => false,
+            _ => true,
+        };
+        if secret_ok && code_unchanged {
             return Ok(SpawnResult {
                 port: SIDECAR_PORT,
                 session_id: launch.session_id.clone(),
@@ -539,19 +714,8 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
                 pid: None,
             });
         }
-        // Stale sidecar (manual run / previous launch secret) — replace it.
-        {
-            let mut guard = state
-                .child
-                .lock()
-                .map_err(|_| VigilError::Message("sidecar lock poisoned".into()))?;
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-        kill_port_holder(SIDECAR_PORT);
-        std::thread::sleep(Duration::from_millis(200));
+        // Stale secret or updated sidecar sources — replace the process.
+        kill_managed_sidecar(state);
     }
 
     {
@@ -578,7 +742,6 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
         }
     }
 
-    let root = find_project_root()?;
     let script = root.join("sidecar").join("index.mjs");
     if !script.is_file() {
         return Err(VigilError::Message(format!(
@@ -615,6 +778,10 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
         return Err(VigilError::Message(
             "Sidecar spawned but did not open 127.0.0.1:47821".into(),
         ));
+    }
+
+    if let Ok(mut guard) = state.script_mtime_ms.lock() {
+        *guard = script_mtime.or_else(|| sidecar_scripts_mtime_ms(&root));
     }
 
     Ok(SpawnResult {
@@ -874,6 +1041,110 @@ fn run_workspace_command(command: String, cwd: String) -> Result<String, VigilEr
     Ok(text)
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalStreamEvent {
+    run_id: String,
+    kind: String,
+    text: Option<String>,
+    code: Option<i32>,
+}
+
+fn emit_terminal(app: &tauri::AppHandle, event: TerminalStreamEvent) {
+    let _ = app.emit("vigil-terminal", event);
+}
+
+fn pipe_terminal_lines(
+    app: tauri::AppHandle,
+    run_id: String,
+    stream: impl std::io::Read + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stream);
+        for line in reader.lines() {
+            match line {
+                Ok(text) => emit_terminal(
+                    &app,
+                    TerminalStreamEvent {
+                        run_id: run_id.clone(),
+                        kind: "chunk".into(),
+                        text: Some(format!("{text}\n")),
+                        code: None,
+                    },
+                ),
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+/// Start a workspace command and stream stdout/stderr to the UI. Returns immediately.
+#[tauri::command]
+fn start_workspace_command(
+    app: tauri::AppHandle,
+    command: String,
+    cwd: String,
+    run_id: String,
+) -> Result<(), VigilError> {
+    std::thread::spawn(move || {
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .current_dir(&cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        let mut child = match child {
+            Ok(child) => child,
+            Err(err) => {
+                emit_terminal(
+                    &app,
+                    TerminalStreamEvent {
+                        run_id: run_id.clone(),
+                        kind: "chunk".into(),
+                        text: Some(format!("Failed to start: {err}\n")),
+                        code: None,
+                    },
+                );
+                emit_terminal(
+                    &app,
+                    TerminalStreamEvent {
+                        run_id,
+                        kind: "done".into(),
+                        text: None,
+                        code: Some(-1),
+                    },
+                );
+                return;
+            }
+        };
+
+        if let Some(stdout) = child.stdout.take() {
+            pipe_terminal_lines(app.clone(), run_id.clone(), stdout);
+        }
+        if let Some(stderr) = child.stderr.take() {
+            pipe_terminal_lines(app.clone(), run_id.clone(), stderr);
+        }
+
+        let code = match child.wait() {
+            Ok(status) => status.code().unwrap_or(-1),
+            Err(_) => -1,
+        };
+        emit_terminal(
+            &app,
+            TerminalStreamEvent {
+                run_id,
+                kind: "done".into(),
+                text: None,
+                code: Some(code),
+            },
+        );
+    });
+    Ok(())
+}
+
 #[tauri::command]
 fn git_repo_info(cwd: String) -> Result<git_ops::GitRepoInfo, VigilError> {
     git_ops::repo_info(&cwd).map_err(VigilError::Message)
@@ -912,6 +1183,7 @@ pub fn run() {
         .manage(SidecarState {
             secret_hex,
             child: Mutex::new(None),
+            script_mtime_ms: Mutex::new(None),
         })
         .setup(|app| {
             let state = app.state::<SidecarState>();
@@ -955,6 +1227,7 @@ pub fn run() {
             delete_path,
             rename_path,
             run_workspace_command,
+            start_workspace_command,
             git_repo_info,
             git_has_commits,
             git_create_branch,

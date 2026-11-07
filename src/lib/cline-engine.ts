@@ -51,6 +51,11 @@ export interface VigilEngineOptions {
   apiKeys?: Partial<Record<LlmProviderId, string>>;
   /** Stops the in-flight sidecar read when the user cancels. */
   signal?: AbortSignal;
+  /** User message this command belongs to. The sidecar stores the file snapshot under this id. */
+  checkpointId?: string;
+  checkpointAt?: number;
+  /** Extra reply-style instructions from chat preferences. */
+  replyStyle?: string;
 }
 
 export type VigilStreamEvent =
@@ -58,15 +63,25 @@ export type VigilStreamEvent =
   | { type: "status"; status: string }
   | { type: "session"; sessionId: string }
   | { type: "chunk"; stream?: string; text: string }
+  | { type: "agent_event"; event?: unknown }
   | {
       type: "tool";
       toolName?: string;
       path?: string;
       content?: string;
+      url?: string;
+      title?: string;
+      imageBase64?: string;
       hook?: string;
       event?: unknown;
     }
-  | { type: "done"; sessionId?: string; text?: string; toolCalls?: unknown[] }
+  | {
+      type: "done";
+      sessionId?: string;
+      text?: string;
+      toolCalls?: unknown[];
+      usage?: { inputTokens: number; outputTokens: number; cost: number };
+    }
   | { type: "error"; message: string }
   | { type: "warning"; message: string }
   | { type: "event"; event: unknown };
@@ -200,6 +215,9 @@ export async function* runVigilTask(
     apiKey,
     cwd,
     clientName: options.clientName ?? "vigil-agent",
+    checkpointId: options.checkpointId,
+    checkpointAt: options.checkpointAt,
+    replyStyle: options.replyStyle,
   };
   const body = JSON.stringify(bodyObj);
   const hmac = await signSidecarBody(secret, session.sessionId, body);

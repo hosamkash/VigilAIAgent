@@ -2,8 +2,15 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main", "ext-site-*", "win-*"],
-  "webviews": ["main", "ext-host", "ext-site-*", "win-*"],
+  "windows": ["main", "ext-site-*", "win-*", "win-vigil-preview"],
+  "webviews": [
+    "main",
+    "ext-host",
+    "ext-site-*",
+    "win-*",
+    "win-vigil-preview",
+    "vigil-embed"
+  ],
   "permissions": [
     "core:default",
     "core:path:default",

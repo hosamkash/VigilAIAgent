@@ -21,6 +21,7 @@ import { isMacPlatform, type PressedKey } from "../../lib/menu-accel";
 import { useEditorTabsStore } from "../../store/editorTabsStore";
 import { useExplorerStore } from "../../store/explorerStore";
 import { useLayoutStore } from "../../store/layoutStore";
+import { formatUsd, useCostStore } from "../../store/costStore";
 
 function isTextField(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -241,7 +242,11 @@ export function MenuBar() {
   const wordWrap = useEditorTabsStore((s) => s.wordWrap);
   const minimap = useEditorTabsStore((s) => s.minimapEnabled);
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
+  const chatVisible = useLayoutStore((s) => s.chatVisible);
   const panelVisible = useLayoutStore((s) => s.bottomVisible);
+  const session = useCostStore((s) => s.sessionTotal);
+  const tokenTotal = Math.max(0, session.inputTokens) + Math.max(0, session.outputTokens);
+  const usageLabel = `${tokenTotal.toLocaleString("en-US")} tokens  /  ${formatUsd(session.cost)}`;
   const [open, setOpen] = useState<string | null>(null);
   const [picker, setPicker] = useState<"commands" | "files" | null>(null);
   const [about, setAbout] = useState(false);
@@ -265,6 +270,7 @@ export function MenuBar() {
       wordWrap,
       minimap,
       sidebarVisible,
+      chatVisible,
       panelVisible,
     });
   }, [
@@ -277,6 +283,7 @@ export function MenuBar() {
     wordWrap,
     minimap,
     sidebarVisible,
+    chatVisible,
     panelVisible,
   ]);
 
@@ -368,6 +375,13 @@ export function MenuBar() {
           onRun={run}
         />
       ))}
+      <div
+        className="ml-auto shrink-0 px-2 text-[11px] font-bold !text-[var(--vigil-text)]"
+        title="Session token usage and cost"
+        aria-label={usageLabel}
+      >
+        {usageLabel}
+      </div>
       {toast && (
         <div className="pointer-events-none absolute top-10 left-1/2 z-50 -translate-x-1/2 rounded border border-[var(--vigil-border)] bg-[var(--vigil-panel)] px-3 py-1.5 text-[12px] text-[var(--vigil-text)] shadow">
           {toast}

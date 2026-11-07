@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { File, GitCompare, Minus, MoreHorizontal, Plus, RefreshCw, Sparkles, Undo2 } from "lucide-react";
+import {
+  ChevronDown,
+  ExternalLink,
+  File,
+  GitCompare,
+  Minus,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Undo2,
+} from "lucide-react";
 import { useExplorerStore } from "../../../store/explorerStore";
 import { useLayoutStore } from "../../../store/layoutStore";
 import { useEditorTabsStore } from "../../../store/editorTabsStore";
 import { useCostStore } from "../../../store/costStore";
 import { useTerminalStore } from "../../../store/terminalStore";
+import { useGitDecorationStore } from "../../../store/gitDecorationStore";
 import { readTextFile, writeTextFile } from "../../../lib/workspace-fs";
 import {
   assertGitOk,
@@ -57,6 +69,42 @@ import { useNativeLiveDictation } from "../../../lib/hooks/useNativeLiveDictatio
 import { SpeechDictationMicButton } from "../../SpeechDictationMicButton";
 
 type ScmTab = "changes" | "graph" | "branches";
+
+const SCM_DONE_LABELS: Record<string, string> = {
+  "Committing…": "Committed",
+  "Pushing…": "Pushed",
+  "Syncing…": "Synced",
+  "Publishing…": "Published",
+  "Pulling…": "Pulled",
+  "Fetching…": "Fetched",
+  "Staging…": "Staged",
+  "Unstaging…": "Unstaged",
+  "Checking out…": "Checked out",
+  "Creating branch…": "Branch created",
+  "Deleting branch…": "Branch deleted",
+  "Deleting remote branch…": "Remote branch deleted",
+  "Merging…": "Merged",
+  "Rebasing…": "Rebased",
+  "Stashing…": "Stashed",
+  "Applying stash…": "Stash applied",
+  "Popping stash…": "Stash popped",
+  "Dropping stash…": "Stash dropped",
+  "Dropping stashes…": "Stashes cleared",
+  "Cherry-picking…": "Cherry-picked",
+  "Undoing commit…": "Commit undone",
+  "Discarding…": "Discarded",
+  "Creating tag…": "Tag created",
+  "Deleting tag…": "Tag deleted",
+  "Creating worktree…": "Worktree created",
+  "Removing worktree…": "Worktree removed",
+  "Cloning…": "Cloned",
+  "Adding remote…": "Remote added",
+  "Removing remote…": "Remote removed",
+};
+
+function scmDoneLabel(progress: string): string {
+  return SCM_DONE_LABELS[progress] ?? "Done";
+}
 
 function IconButton({
   title,
@@ -240,6 +288,8 @@ export function ScmSidebar() {
   const [aiBusy, setAiBusy] = useState(false);
   const [review, setReview] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | null>(null);
 
   const [branchDesc, setBranchDesc] = useState("");
   const [branchName, setBranchName] = useState("");
@@ -251,6 +301,7 @@ export function ScmSidebar() {
   const [stashMsg, setStashMsg] = useState("");
   const [viewMode, setViewMode] = useState<ChangeView>("list");
   const [sortBy, setSortBy] = useState<ChangeSort>("path");
+  const [commitMenuOpen, setCommitMenuOpen] = useState(false);
   const [menu, setMenu] = useState<{
     kind: "more" | "branch";
     top: number;
@@ -289,6 +340,7 @@ export function ScmSidebar() {
         setIncoming([]);
         setOutgoing([]);
       }
+      void useGitDecorationStore.getState().refresh();
     } catch (err) {
       setLog(String(err));
     } finally {
@@ -305,6 +357,12 @@ export function ScmSidebar() {
     window.addEventListener("vigil:git-changed", onGit);
     return () => window.removeEventListener("vigil:git-changed", onGit);
   }, [refresh]);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimer.current != null) window.clearTimeout(noticeTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!branchName) {
@@ -339,8 +397,20 @@ export function ScmSidebar() {
     setMenu({ kind, top: rect.bottom + 4, left });
   }
 
+  function flashNotice(message: string) {
+    if (noticeTimer.current != null) {
+      window.clearTimeout(noticeTimer.current);
+    }
+    setNotice(message);
+    noticeTimer.current = window.setTimeout(() => {
+      setNotice((current) => (current === message ? null : current));
+      noticeTimer.current = null;
+    }, 1600);
+  }
+
   async function withProgress(label: string, fn: () => Promise<string>) {
     setProgress(label);
+    setNotice(null);
     setUiError(null);
     const appendOutput = useTerminalStore.getState().appendOutput;
     appendOutput(`\n$ ${label}\n`);
@@ -349,6 +419,7 @@ export function ScmSidebar() {
       appendOutput(`${out || "ok"}\n`);
       setLog(out);
       await refresh();
+      flashNotice(scmDoneLabel(label));
       return { ok: true as const, error: undefined };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -386,7 +457,26 @@ export function ScmSidebar() {
       if (autoStage || noCommits) assertGitOk(await gitStageAll(root));
       return gitCommit(root, message.trim());
     });
-    if (result.ok) setMessage("");
+    if (result.ok) {
+      setMessage("");
+      setCommitMenuOpen(false);
+    }
+  }
+
+  async function handleCommitAndPush() {
+    if (!root || !message.trim()) {
+      setUiError("Enter a commit message");
+      return;
+    }
+    setCommitMenuOpen(false);
+    const committed = await withProgress("Committing…", async () => {
+      if (autoStage || noCommits) assertGitOk(await gitStageAll(root));
+      return gitCommit(root, message.trim());
+    });
+    if (!committed.ok) return;
+    setMessage("");
+    await refresh();
+    runCommand("push");
   }
 
   async function handleGenerateCommit() {
@@ -535,6 +625,19 @@ export function ScmSidebar() {
     await withProgress("Checking out…", () => gitCheckoutCommit(root, node.hash));
   }
 
+  async function checkoutLocalBranch(branch: string) {
+    if (!root || branch === status?.branch) return;
+    const current = status?.branch || "HEAD";
+    const yes = await ask({
+      kind: "confirm",
+      title: "Switch branch",
+      message: `Switch from "${current}" to "${branch}"?`,
+      confirm: "Switch",
+    });
+    if (!yes) return;
+    await withProgress("Checking out…", () => gitCheckout(root, branch));
+  }
+
   async function branchFromCommit(node: GitGraphNode) {
     if (!root) return;
     const name = await ask({
@@ -643,10 +746,48 @@ export function ScmSidebar() {
     );
   }
 
+  const hasDirty = !!(
+    status?.staged.length ||
+    status?.changes.length ||
+    status?.untracked.length ||
+    status?.conflicted.length
+  );
+  const ahead = status?.ahead ?? 0;
+  const behind = status?.behind ?? 0;
+  const primaryAction: "commit" | "push" | "sync" | "publish" =
+    hasDirty || noCommits
+      ? "commit"
+      : status?.hasCommits && !status.upstream
+        ? "publish"
+        : behind > 0
+          ? "sync"
+          : ahead > 0
+            ? "push"
+            : "commit";
   const canCommit =
     !!message.trim() &&
     (!!status?.staged.length || autoStage || !!noCommits);
+  const primaryDisabled =
+    !!progress ||
+    (primaryAction === "commit" ? !canCommit : noCommits);
+  const primaryLabel =
+    primaryAction === "commit"
+      ? noCommits
+        ? "✓ Initial Commit"
+        : "✓ Commit"
+      : primaryAction === "push"
+        ? `↑ Push${ahead > 0 ? ` ${ahead}` : ""}`
+        : primaryAction === "sync"
+          ? `↻ Sync ↓${behind} ↑${ahead}`
+          : "☁ Publish Branch";
   const graph = graphRaw ? parseGitGraphLog(graphRaw) : null;
+
+  function runPrimaryAction() {
+    if (primaryAction === "commit") void handleCommit();
+    else if (primaryAction === "push") runCommand("push");
+    else if (primaryAction === "sync") runCommand("sync");
+    else runCommand("publishBranch");
+  }
 
   return (
     <div className="flex h-full flex-col p-2">
@@ -672,8 +813,15 @@ export function ScmSidebar() {
       )}
 
       {progress && (
-        <div className="mb-1 text-[10px] text-[var(--vigil-accent)]">
-          {progress}
+        <div className="mb-2 flex items-center gap-1.5 rounded border border-[var(--vigil-accent)]/35 bg-[var(--vigil-accent-soft)] px-2 py-1.5 text-[11px] text-[var(--vigil-text)]">
+          <RefreshCw className="h-3 w-3 shrink-0 animate-spin text-[var(--vigil-accent)]" />
+          <span>{progress}</span>
+        </div>
+      )}
+
+      {!progress && notice && (
+        <div className="mb-2 rounded border border-emerald-500/35 bg-emerald-500/10 px-2 py-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
+          {notice}
         </div>
       )}
 
@@ -695,35 +843,28 @@ export function ScmSidebar() {
           </span>
           <span className="text-[9px] opacity-70">▾</span>
         </button>
-        <button
-          type="button"
-          disabled={!!noCommits || !!progress}
-          title="Sync: pull then push"
-          className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[10px] disabled:opacity-40"
-          onClick={() => runCommand("sync")}
-        >
-          {(status?.behind ?? 0) > 0 || (status?.ahead ?? 0) > 0
-            ? `↓${status?.behind ?? 0} ↑${status?.ahead ?? 0}`
-            : "Sync"}
-        </button>
-        {status?.hasCommits && !status.upstream && (
-          <button
-            type="button"
-            disabled={!!progress}
-            title="Publish this branch to a remote"
-            className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[10px] disabled:opacity-40"
-            onClick={() => runCommand("publishBranch")}
-          >
-            Publish
-          </button>
-        )}
         {status?.upstream && (
-          <span className="min-w-0 truncate font-mono text-[10px] text-[var(--vigil-muted)]" title="Upstream">
+          <span
+            className="min-w-0 truncate font-mono text-[10px] text-[var(--vigil-muted)]"
+            title="Upstream"
+          >
             {status.upstream}
+            {(ahead > 0 || behind > 0) && ` · ↓${behind} ↑${ahead}`}
           </span>
         )}
+        <button
+          type="button"
+          disabled={!!noCommits || !!progress || !status?.branch}
+          title="Create pull request for the current branch on the remote"
+          aria-label="Create pull request on remote"
+          className="ml-auto flex shrink-0 items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[10px] text-[var(--vigil-muted)] hover:bg-[var(--vigil-hover)] hover:text-[var(--vigil-text)] disabled:opacity-40"
+          onClick={() => runCommand("openPullRequest")}
+        >
+          <ExternalLink className="h-3 w-3" />
+          <span>PR</span>
+        </button>
       </div>
-      {status?.upstream && (
+      {status?.upstream && (incoming.length > 0 || outgoing.length > 0) && (
         <details className="mb-2 text-[10px]">
           <summary className="cursor-pointer text-[var(--vigil-muted)]">
             Incoming {incoming.length} · Outgoing {outgoing.length}
@@ -732,6 +873,165 @@ export function ScmSidebar() {
           <CommitList title="Outgoing" lines={outgoing} />
         </details>
       )}
+
+      {/* Cursor-style: commit box always pinned above Changes / Graph / Branches */}
+      <div className="mb-2 shrink-0 rounded border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-1.5">
+        <div className="mb-1 flex gap-1">
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                if (primaryAction === "commit") void handleCommit();
+                else runPrimaryAction();
+              }
+            }}
+            placeholder={
+              noCommits
+                ? "Initial commit: Project setup"
+                : `Message (⌘⏎ to ${primaryAction === "commit" ? "commit" : primaryAction})`
+            }
+            title="⌘Enter or Ctrl+Enter for the primary action"
+            rows={3}
+            className="min-w-0 flex-1 resize-none rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1 text-xs leading-snug"
+          />
+          <div className="flex shrink-0 flex-col gap-1">
+            <button
+              type="button"
+              disabled={aiBusy || (!hasDirty && !noCommits)}
+              title="Generate a clear commit message with AI"
+              aria-label="Generate a clear commit message with AI"
+              className="flex h-7 w-7 items-center justify-center rounded border border-[var(--vigil-border)] hover:bg-[var(--vigil-hover)] disabled:opacity-40"
+              onClick={() => void handleGenerateCommit()}
+            >
+              {aiBusy ? "…" : <Sparkles className="h-3.5 w-3.5" />}
+            </button>
+            <SpeechDictationMicButton
+              size="sm"
+              active={listening}
+              disabled={aiBusy}
+              onClick={toggleDictation}
+              title={
+                listening
+                  ? "Stop voice to text"
+                  : "Voice to text — commit message"
+              }
+            />
+          </div>
+        </div>
+
+        <label className="mb-1.5 flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
+          <input
+            type="checkbox"
+            checked={autoStage}
+            onChange={(e) => setAutoStage(e.target.checked)}
+          />
+          Auto-stage all before commit
+        </label>
+
+        <div className="relative flex gap-0.5">
+          <button
+            type="button"
+            disabled={primaryDisabled}
+            aria-busy={!!progress}
+            className={`flex flex-1 items-center justify-center gap-1.5 rounded-l bg-[var(--vigil-accent)] px-2 py-1.5 text-xs font-medium text-white ${
+              progress ? "cursor-wait" : "disabled:opacity-40"
+            }`}
+            onClick={() => runPrimaryAction()}
+          >
+            {progress ? (
+              <>
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                <span className="truncate">{progress}</span>
+              </>
+            ) : (
+              primaryLabel
+            )}
+          </button>
+          <button
+            type="button"
+            disabled={!!progress}
+            title="More commit actions"
+            aria-label="More commit actions"
+            className={`rounded-r bg-[var(--vigil-accent)] px-1.5 text-white hover:brightness-110 ${
+              progress ? "cursor-wait opacity-80" : "disabled:opacity-40"
+            }`}
+            onClick={() => setCommitMenuOpen((open) => !open)}
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+          {commitMenuOpen && (
+            <div className="absolute top-full right-0 z-20 mt-0.5 min-w-[11rem] rounded border border-[var(--vigil-border)] bg-[var(--vigil-panel)] py-1 text-[11px] shadow-lg">
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-[var(--vigil-hover)] disabled:opacity-40"
+                disabled={!canCommit || !!progress}
+                onClick={() => {
+                  setCommitMenuOpen(false);
+                  void handleCommit();
+                }}
+              >
+                Commit
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-[var(--vigil-hover)] disabled:opacity-40"
+                disabled={!canCommit || !!progress || noCommits}
+                onClick={() => void handleCommitAndPush()}
+              >
+                Commit & Push
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-[var(--vigil-hover)] disabled:opacity-40"
+                disabled={!!progress || noCommits}
+                onClick={() => {
+                  setCommitMenuOpen(false);
+                  runCommand("push");
+                }}
+              >
+                Push
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-[var(--vigil-hover)] disabled:opacity-40"
+                disabled={!!progress || noCommits}
+                onClick={() => {
+                  setCommitMenuOpen(false);
+                  runCommand("openPullRequest");
+                }}
+              >
+                Create Pull Request…
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-[var(--vigil-hover)] disabled:opacity-40"
+                disabled={!!progress || noCommits}
+                onClick={() => {
+                  setCommitMenuOpen(false);
+                  runCommand("sync");
+                }}
+              >
+                Sync (Pull then Push)
+              </button>
+              {status?.hasCommits && !status.upstream && (
+                <button
+                  type="button"
+                  className="block w-full px-3 py-1.5 text-left hover:bg-[var(--vigil-hover)] disabled:opacity-40"
+                  disabled={!!progress}
+                  onClick={() => {
+                    setCommitMenuOpen(false);
+                    runCommand("publishBranch");
+                  }}
+                >
+                  Publish Branch
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="mb-2 flex gap-1 border-b border-[var(--vigil-border)] pb-1 text-[10px]">
         {(
@@ -757,77 +1057,26 @@ export function ScmSidebar() {
       </div>
 
       {tab === "changes" && (
-        <>
-          <div className="mb-1 flex gap-1">
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  void handleCommit();
-                }
-              }}
-              placeholder={
-                noCommits
-                  ? "Initial commit: Project setup"
-                  : "Commit message"
-              }
-              title="⌘Enter or Ctrl+Enter to commit"
-              rows={2}
-              className="min-w-0 flex-1 rounded border border-[var(--vigil-border)] bg-[var(--vigil-input)] px-2 py-1 text-xs"
-            />
-            <div className="flex shrink-0 flex-col justify-between">
-              <button
-                type="button"
-                disabled={aiBusy}
-                title="Generate conventional commit with Gemini Flash"
-                aria-label="Generate conventional commit with Gemini Flash"
-                className="flex h-7 w-7 items-center justify-center rounded border border-[var(--vigil-border)] hover:bg-[var(--vigil-hover)] disabled:opacity-40"
-                onClick={() => void handleGenerateCommit()}
-              >
-                {aiBusy ? (
-                  "…"
-                ) : (
-                  <Sparkles className="h-3.5 w-3.5" />
-                )}
-              </button>
-              <SpeechDictationMicButton
-                size="sm"
-                active={listening}
-                disabled={aiBusy}
-                onClick={toggleDictation}
-                title={
-                  listening
-                    ? "Stop voice to text"
-                    : "Voice to text — commit message"
-                }
-              />
-            </div>
-          </div>
-
-          <label className="mb-1 flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
-            <input
-              type="checkbox"
-              checked={autoStage}
-              onChange={(e) => setAutoStage(e.target.checked)}
-            />
-            Auto-stage all before commit
-          </label>
-
-          <div className="mb-2 flex gap-1">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="mb-1 flex gap-1 text-[10px]">
             <button
               type="button"
-              disabled={!canCommit || !!progress}
-              className="flex-1 rounded bg-[var(--vigil-accent)] px-2 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-              onClick={() => void handleCommit()}
+              className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5"
+              onClick={() => void gitStageAll(root).then(refresh)}
             >
-              {noCommits ? "Initial Commit" : "Commit"}
+              Stage all
             </button>
             <button
               type="button"
-              disabled={aiBusy || !(status?.staged.length || status?.changes.length)}
-              className="rounded border border-[var(--vigil-border)] px-2 py-1 text-[10px] disabled:opacity-40"
+              className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5"
+              onClick={() => void gitUnstageAll(root).then(refresh)}
+            >
+              Unstage all
+            </button>
+            <button
+              type="button"
+              disabled={aiBusy || !hasDirty}
+              className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5 disabled:opacity-40"
               title="AI review of staged/unstaged diff"
               onClick={() => void handleFindIssues()}
             >
@@ -868,23 +1117,6 @@ export function ScmSidebar() {
               ))}
             </Section>
           )}
-
-          <div className="mb-1 flex gap-1 text-[10px]">
-            <button
-              type="button"
-              className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5"
-              onClick={() => void gitStageAll(root).then(refresh)}
-            >
-              Stage all
-            </button>
-            <button
-              type="button"
-              className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5"
-              onClick={() => void gitUnstageAll(root).then(refresh)}
-            >
-              Unstage all
-            </button>
-          </div>
 
           <div className="min-h-0 flex-1 space-y-3 overflow-auto">
             <Section title="Staged" count={status?.staged.length ?? 0}>
@@ -938,18 +1170,20 @@ export function ScmSidebar() {
               Stash
             </button>
           </div>
-        </>
+        </div>
       )}
 
       {tab === "graph" && (
-        <GitGraphView
-          graph={graph}
-          currentBranch={status?.branch ?? ""}
-          onSelectCommit={(n) => void onSelectCommit(n)}
-          onCheckout={(n) => void checkoutGraphCommit(n)}
-          onCreateBranch={(n) => void branchFromCommit(n)}
-          onCherryPick={(n) => void cherryPickCommit(n)}
-        />
+        <div className="min-h-0 flex-1 overflow-auto">
+          <GitGraphView
+            graph={graph}
+            currentBranch={status?.branch ?? ""}
+            onSelectCommit={(n) => void onSelectCommit(n)}
+            onCheckout={(n) => void checkoutGraphCommit(n)}
+            onCreateBranch={(n) => void branchFromCommit(n)}
+            onCherryPick={(n) => void cherryPickCommit(n)}
+          />
+        </div>
       )}
 
       {tab === "branches" && (
@@ -1019,9 +1253,7 @@ export function ScmSidebar() {
                     ? "bg-[var(--vigil-accent-soft)] text-[var(--vigil-accent)]"
                     : "hover:bg-[var(--vigil-hover)]"
                 }`}
-                onClick={() =>
-                  void withProgress("Checking out…", () => gitCheckout(root, b))
-                }
+                onClick={() => void checkoutLocalBranch(b)}
               >
                 {b === status?.branch ? `● ${b}` : b}
               </button>
@@ -1050,7 +1282,7 @@ function ScmToolbar({
   onMore: (el: HTMLElement) => void;
 }) {
   return (
-    <div className="mb-2 flex items-center gap-1 text-[11px] font-semibold uppercase text-[var(--vigil-muted)]">
+    <div className="mb-2 flex items-center gap-1 pr-12 text-[11px] font-semibold uppercase text-[var(--vigil-muted)]">
       <span className="min-w-0 flex-1 truncate">Source Control</span>
       <button
         type="button"

@@ -1,6 +1,6 @@
 /**
- * Cleanup helper for any leftover child webview from earlier experiments.
- * We no longer embed remote sites as child webviews (they cover HTML chrome).
+ * Cleanup helper for leftover child webviews that are not Vigil Browser.
+ * Vigil Browser embed is managed by vigil-embed-webview.ts.
  */
 
 import { Webview } from "@tauri-apps/api/webview";

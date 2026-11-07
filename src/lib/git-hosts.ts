@@ -102,6 +102,37 @@ export function safeProjectName(name: string): string {
   return cleaned.slice(0, 80) || "project";
 }
 
+export function isGitAuthFailure(err: unknown): boolean {
+  const text = err instanceof Error ? err.message : String(err);
+  return (
+    /\b401\b/.test(text) ||
+    /\b403\b/.test(text) ||
+    /bad credentials/i.test(text) ||
+    /requires authentication/i.test(text) ||
+    /invalid.*(token|credential)/i.test(text) ||
+    /token.*(expired|revoked|invalid)/i.test(text) ||
+    /sign-?in expired/i.test(text) ||
+    /was revoked/i.test(text)
+  );
+}
+
+function friendlyHttpError(status: number, body: string): string {
+  let message = "";
+  try {
+    const parsed = JSON.parse(body) as { message?: string };
+    if (typeof parsed.message === "string") message = parsed.message.trim();
+  } catch {
+    message = body.trim().slice(0, 180);
+  }
+  if (status === 401 || /bad credentials/i.test(message)) {
+    return "GitHub sign-in expired or was revoked. Sign in again.";
+  }
+  if (status === 403) {
+    return message || "Access denied by the Git host.";
+  }
+  return message || `Request failed (${status})`;
+}
+
 async function http(url: string, headers: Record<string, string>): Promise<unknown> {
   const init = { method: "GET", headers };
   let response: Response;
@@ -112,7 +143,7 @@ async function http(url: string, headers: Record<string, string>): Promise<unkno
   }
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(text.slice(0, 280) || `Request failed (${response.status})`);
+    throw new Error(friendlyHttpError(response.status, text));
   }
   return text ? JSON.parse(text) : {};
 }

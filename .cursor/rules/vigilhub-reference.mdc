@@ -1,0 +1,19 @@
+---
+description: Treat VigilHub as the official reference for AI tools, components, and settings before implementing in VigilAIAgent
+alwaysApply: true
+---
+
+# VigilHub is the official reference
+
+Before implementing AI tools, UI components, chat/agent UX, settings flows, or similar product behavior in VigilAIAgent, check the reference project first:
+
+`/Users/user/Documents/Work/Hosam Projects/React/VigilHub/VigilHub`
+
+That folder is the real app (the path above ends in nested `VigilHub`). Use it as a **reference only**:
+
+- Prefer matching VigilHub’s patterns for tools, components, settings, and related UX when they fit this Tauri + React desktop app.
+- Do not copy the whole stack blindly. Adapt for VigilAIAgent (Tauri 2, Vite, local-first, no uploading project files to Firestore).
+- Before building a new AI tool, shared component, or settings screen from scratch, search VigilHub for an existing approach and reuse the idea if it is still a good fit.
+- When VigilHub and VigilAIAgent conflict, keep VigilAIAgent’s desktop constraints; borrow the product behavior from VigilHub.
+
+Do not treat VigilHub as a dependency or submodule. Read it, learn from it, then implement here.

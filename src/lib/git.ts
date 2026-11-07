@@ -380,13 +380,53 @@ export async function gitDiffHead(
 
 export async function gitListBranches(cwd: string): Promise<string[]> {
   const out = await runWorkspaceCommand(
-    "git branch --format='%(refname:short)' 2>/dev/null || true",
+    "git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null || git branch --format='%(refname:short)' 2>/dev/null || true",
     cwd,
   );
   return stripExit(out)
     .split("\n")
-    .map((l) => l.trim())
+    .map((l) => l.trim().replace(/^'|'$/g, ""))
     .filter(Boolean);
+}
+
+export type GitRecentCommit = {
+  hash: string;
+  shortHash: string;
+  message: string;
+  refs: string[];
+};
+
+/** Recent commits across all refs — for "create branch from" when tips aren't on HEAD. */
+export async function gitListRecentCommits(
+  cwd: string,
+  maxCount = 40,
+): Promise<GitRecentCommit[]> {
+  const out = await runWorkspaceCommand(
+    `git log --all --format='%H%x00%s%x00%D' -n ${maxCount} 2>/dev/null || true`,
+    cwd,
+  );
+  const rows: GitRecentCommit[] = [];
+  for (const line of stripExit(out).split("\n")) {
+    if (!line.trim()) continue;
+    const [hash = "", message = "", decorate = ""] = line.split("\0");
+    if (!/^[0-9a-f]{7,40}$/i.test(hash)) continue;
+    const refs = decorate
+      .split(",")
+      .map((part) =>
+        part
+          .trim()
+          .replace(/^HEAD ->\s*/, "")
+          .replace(/^tag:\s*/, ""),
+      )
+      .filter((part) => part && part !== "HEAD");
+    rows.push({
+      hash,
+      shortHash: hash.slice(0, 7),
+      message: message.trim(),
+      refs,
+    });
+  }
+  return rows;
 }
 
 export async function gitCheckout(cwd: string, branch: string): Promise<string> {
@@ -599,6 +639,29 @@ export async function gitListRemoteBranches(cwd: string): Promise<string[]> {
 export async function gitListRemotes(cwd: string): Promise<string[]> {
   const out = await gitText(cwd, "git remote");
   return out.split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+/** Resolve `git remote get-url <name>` (defaults to origin / upstream remote). */
+export async function gitGetRemoteUrl(
+  cwd: string,
+  remote = "origin",
+): Promise<string | null> {
+  if (!remote || remote.startsWith("-")) return null;
+  const out = await runWorkspaceCommand(
+    `git remote get-url ${JSON.stringify(remote)} 2>/dev/null || true`,
+    cwd,
+  );
+  const url = stripExit(out).trim();
+  return url || null;
+}
+
+/** Prefer the upstream remote name, else origin. */
+export function gitPreferredRemoteName(upstream: string | null | undefined): string {
+  if (upstream) {
+    const slash = upstream.indexOf("/");
+    if (slash > 0) return upstream.slice(0, slash);
+  }
+  return "origin";
 }
 
 export async function gitListTags(cwd: string): Promise<string[]> {

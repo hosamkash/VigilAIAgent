@@ -76,13 +76,34 @@ button {
   background: var(--vigil-scrollbar-hover);
 }
 
-.xterm {
+.vigil-terminal .xterm {
   height: 100%;
-  padding: 4px 8px;
+  padding: 6px 8px 4px;
+  background: transparent;
+  overflow: hidden;
 }
 
-.xterm-viewport {
+.vigil-terminal .xterm-viewport {
+  background-color: transparent !important;
+  overflow-x: hidden !important;
   overflow-y: auto !important;
+}
+
+.vigil-terminal .xterm-screen,
+.vigil-terminal .xterm-helpers {
+  overflow: hidden;
+}
+
+.vigil-terminal .xterm-helper-textarea {
+  left: 0 !important;
+  top: 0 !important;
+  opacity: 0 !important;
+  outline: none !important;
+}
+
+.vigil-terminal .composition-view {
+  background: var(--vigil-terminal-bg);
+  color: var(--vigil-terminal-fg);
 }
 
 .theme-card {
@@ -114,6 +135,27 @@ button {
 
 .split-view-view {
   overflow: hidden !important;
+}
+
+.vigil-status-warning {
+  color: light-dark(#8a5a00, #e2b340);
+}
+
+.vigil-pane-toggle {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--vigil-accent);
+  color: #fff;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vigil-accent) 70%, #000);
+}
+
+.vigil-pane-toggle:hover {
+  filter: brightness(1.12);
 }
 
 @keyframes vigil-spin {
@@ -195,4 +237,18 @@ button {
   max-width: 100%;
   height: auto;
   border-radius: 4px;
+}
+
+/* Explorer → chat pointer drag: never paint webpage selection across panes. */
+html.vigil-explorer-dragging,
+html.vigil-explorer-dragging * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  cursor: grabbing !important;
+}
+
+html.vigil-explorer-dragging .monaco-editor .view-lines,
+html.vigil-explorer-dragging .monaco-editor .view-line {
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }

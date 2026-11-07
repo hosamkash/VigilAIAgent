@@ -5,6 +5,7 @@ import {
   readLastWorkspace,
   rememberProject,
 } from "../lib/recent-projects";
+import { ensureProjectRules } from "../lib/project-rules";
 import { listDir, type DirEntryInfo } from "../lib/workspace-fs";
 import { useEditorTabsStore } from "./editorTabsStore";
 
@@ -27,6 +28,8 @@ interface ExplorerState {
   closeLauncher: () => void;
   toggleExpand: (path: string) => Promise<void>;
   selectPath: (path: string | null) => void;
+  /** Expand parents, load folders, and select the file in the tree. */
+  revealPath: (filePath: string) => Promise<void>;
   refresh: (path?: string) => Promise<void>;
   setSearchQuery: (q: string) => void;
   setSearchResults: (results: string[]) => void;
@@ -48,6 +51,11 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   openWorkspace: async (path) => {
     const root = await invoke<string>("set_workspace_cwd", { path });
     rememberProject(root);
+    try {
+      await ensureProjectRules(root);
+    } catch {
+      /* Rules file is optional; opening the project still succeeds. */
+    }
     const entries = await listDir(root);
     useEditorTabsStore.getState().closeAll();
     set({
@@ -127,6 +135,51 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     }
   },
   selectPath: (selectedPath) => set({ selectedPath }),
+  revealPath: async (filePath) => {
+    const target = filePath.replace(/\\/g, "/");
+    const roots = [get().root, ...get().extraRoots]
+      .filter((r): r is string => Boolean(r))
+      .map((r) => r.replace(/\\/g, "/").replace(/\/+$/, ""));
+    const root =
+      roots.find((r) => target === r || target.startsWith(`${r}/`)) ?? null;
+    if (!root) {
+      set({ selectedPath: filePath });
+      return;
+    }
+
+    const rel = target.slice(root.length).replace(/^\//, "");
+    const parts = rel.split("/").filter(Boolean);
+    const expanded = { ...get().expanded, [root]: true };
+    let current = root;
+
+    for (let i = 0; i < parts.length - 1; i++) {
+      current = `${current}/${parts[i]}`;
+      expanded[current] = true;
+      if (!get().children[current]) {
+        try {
+          const entries = await listDir(current);
+          set((s) => ({ children: { ...s.children, [current]: entries } }));
+        } catch (err) {
+          set({ error: String(err) });
+          break;
+        }
+      }
+    }
+
+    if (!get().children[root]) {
+      try {
+        const entries = await listDir(root);
+        set((s) => ({ children: { ...s.children, [root]: entries } }));
+      } catch (err) {
+        set({ error: String(err) });
+      }
+    }
+
+    set({
+      expanded: { ...get().expanded, ...expanded },
+      selectedPath: filePath,
+    });
+  },
   refresh: async (path) => {
     const target = path ?? get().root;
     if (!target) return;

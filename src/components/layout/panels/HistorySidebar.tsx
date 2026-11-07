@@ -59,7 +59,7 @@ export function HistorySidebar() {
 
   return (
     <div className="flex h-full flex-col p-2">
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <div className="mb-2 flex items-center justify-between gap-2 pr-12">
         <div className="text-[11px] font-semibold uppercase text-[var(--vigil-muted)]">
           Vigil History
         </div>

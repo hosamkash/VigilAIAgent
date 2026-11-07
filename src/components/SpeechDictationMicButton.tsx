@@ -13,6 +13,7 @@ type SpeechDictationMicButtonProps = {
   size?: "sm" | "md";
   disabled?: boolean;
   title?: string;
+  vivid?: boolean;
 };
 
 export function SpeechDictationMicButton({
@@ -22,6 +23,7 @@ export function SpeechDictationMicButton({
   size = "md",
   disabled,
   title,
+  vivid = false,
 }: SpeechDictationMicButtonProps) {
   const dim = size === "sm" ? "h-7 w-7" : "h-8 w-8";
   const icon = size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4";
@@ -43,8 +45,10 @@ export function SpeechDictationMicButton({
         "relative flex shrink-0 items-center justify-center rounded-full border shadow-sm transition-colors disabled:opacity-50",
         dim,
         active
-          ? "border-rose-600 bg-rose-600 text-white shadow-rose-400 hover:border-rose-700 hover:text-white"
-          : "border-[var(--vigil-border)] bg-[var(--vigil-panel)] text-[var(--vigil-muted)] hover:border-orange-300 hover:text-orange-700",
+          ? "border-rose-600 bg-rose-600 !text-white shadow-rose-400 hover:border-rose-700 hover:!text-white"
+          : vivid
+            ? "border-amber-500 bg-amber-500 !text-white hover:border-amber-600 hover:bg-amber-600 hover:!text-white"
+            : "border-[var(--vigil-border)] bg-[var(--vigil-panel)] text-[var(--vigil-muted)] hover:border-orange-300 hover:text-orange-700",
         className,
       )}
     >

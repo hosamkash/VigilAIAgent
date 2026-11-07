@@ -10,6 +10,23 @@ export interface ThemeDefinition {
   vars: Record<string, string>;
 }
 
+/** Cursor / VS Code gitDecoration.* colors for the explorer. */
+const GIT_DECO_LIGHT = {
+  "--vigil-git-modified": "#895503",
+  "--vigil-git-untracked": "#007100",
+  "--vigil-git-added": "#587c0c",
+  "--vigil-git-deleted": "#ad0707",
+  "--vigil-git-conflict": "#ad0707",
+} as const;
+
+const GIT_DECO_DARK = {
+  "--vigil-git-modified": "#e2c08d",
+  "--vigil-git-untracked": "#73c991",
+  "--vigil-git-added": "#81b88b",
+  "--vigil-git-deleted": "#c74e39",
+  "--vigil-git-conflict": "#e4676b",
+} as const;
+
 export const THEMES: ThemeDefinition[] = [
   {
     id: "light",
@@ -41,6 +58,7 @@ export const THEMES: ThemeDefinition[] = [
       "--vigil-terminal-bg": "#ffffff",
       "--vigil-terminal-fg": "#1e1e1e",
       "--vigil-terminal-cursor": "#1e1e1e",
+      ...GIT_DECO_LIGHT,
     },
   },
   {
@@ -73,6 +91,7 @@ export const THEMES: ThemeDefinition[] = [
       "--vigil-terminal-bg": "#1e1e1e",
       "--vigil-terminal-fg": "#cccccc",
       "--vigil-terminal-cursor": "#cccccc",
+      ...GIT_DECO_DARK,
     },
   },
   {
@@ -105,6 +124,7 @@ export const THEMES: ThemeDefinition[] = [
       "--vigil-terminal-bg": "#0b1220",
       "--vigil-terminal-fg": "#e2e8f0",
       "--vigil-terminal-cursor": "#38bdf8",
+      ...GIT_DECO_DARK,
     },
   },
   {
@@ -137,6 +157,7 @@ export const THEMES: ThemeDefinition[] = [
       "--vigil-terminal-bg": "#ffffff",
       "--vigil-terminal-fg": "#1f2a24",
       "--vigil-terminal-cursor": "#2f6f4e",
+      ...GIT_DECO_LIGHT,
     },
   },
   {
@@ -169,6 +190,7 @@ export const THEMES: ThemeDefinition[] = [
       "--vigil-terminal-bg": "#1c1410",
       "--vigil-terminal-fg": "#f5e6d3",
       "--vigil-terminal-cursor": "#f59e0b",
+      ...GIT_DECO_DARK,
     },
   },
 ];

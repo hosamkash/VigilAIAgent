@@ -4,6 +4,7 @@ import type { ApiKeyProvider, BiometricStatus } from "../lib/secure-storage";
 import {
   getBiometricStatus,
   isBiometricEnabled,
+  isDeviceAuthEnabled,
   setBiometricEnabled,
   testBiometric,
 } from "../lib/secure-storage";
@@ -22,6 +23,7 @@ import {
   saveUserVigilDb,
   setConfiguredVigilDbPath,
 } from "../lib/vigil-db";
+import { ChatPreferencesFields } from "./ChatQuickSettings";
 
 const PROVIDERS: { id: ApiKeyProvider; label: string }[] = [
   { id: "openai", label: "OpenAI" },
@@ -29,7 +31,7 @@ const PROVIDERS: { id: ApiKeyProvider; label: string }[] = [
   { id: "anthropic", label: "Anthropic" },
 ];
 
-type SettingsPage = "appearance" | "keys" | "database" | "usage";
+type SettingsPage = "appearance" | "chat" | "keys" | "database" | "usage";
 
 const NAV: Array<{
   id: SettingsPage;
@@ -56,6 +58,23 @@ const NAV: Array<{
         <circle cx="8" cy="10" r="1.1" fill="currentColor" />
         <circle cx="10.5" cy="7.5" r="1.1" fill="currentColor" />
         <circle cx="14" cy="7.8" r="1.1" fill="currentColor" />
+      </svg>
+    ),
+  },
+  {
+    id: "chat",
+    label: "Chat",
+    hint: "Model, voice & replies",
+    accent: "#0078d4",
+    soft: "rgba(0, 120, 212, 0.14)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <path
+          d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7A2.5 2.5 0 0 1 16.5 16H10l-3.8 3.2c-.7.6-1.7.1-1.7-.8V6.5Z"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinejoin="round"
+        />
       </svg>
     ),
   },
@@ -373,66 +392,95 @@ export function SettingsPanel() {
             </div>
           )}
 
+          {page === "chat" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">Chat preferences</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  Same options as the quick settings next to the model picker.
+                  Choices stay saved for the next launch.
+                </p>
+              </div>
+              <div className="rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-4">
+                <ChatPreferencesFields />
+              </div>
+            </div>
+          )}
+
           {page === "keys" && (
             <form onSubmit={onSave} className="max-w-lg space-y-4 p-6">
               <div className="rounded border border-[var(--vigil-border)] p-3">
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span>
-                    Use {bioStatus?.label ?? "Biometrics"} before key access
-                    <div className="text-xs text-[var(--vigil-muted)]">
-                      Layer 1: device auth · Layer 2:{" "}
-                      {bioStatus?.vaultLabel ?? "OS secure storage"}
-                      {bioStatus?.message ? ` — ${bioStatus.message}` : ""}
-                    </div>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={useBio}
-                    onChange={(e) => {
-                      setUseBio(e.target.checked);
-                      setBiometricEnabled(e.target.checked);
-                    }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="mt-2 rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs disabled:opacity-50"
-                  disabled={bioBusy}
-                  onClick={() => {
-                    setError(null);
-                    setBioMsg("Waiting for authentication…");
-                    setBioBusy(true);
-                    void testBiometric("Unlock Vigil AI Agent")
-                      .then((result) =>
-                        setBioMsg(
-                          result.authenticated === true
-                            ? "Biometrics OK — native dialog completed successfully."
-                            : `Biometrics denied (${result.detail}).`,
-                        ),
-                      )
-                      .catch((err) => {
-                        const msg =
-                          err instanceof Error ? err.message : String(err);
-                        setBioMsg(`Biometrics error: ${msg}`);
-                        setError(msg);
-                      })
-                      .finally(() => setBioBusy(false));
-                  }}
-                >
-                  {bioBusy ? "Waiting…" : "Test biometric"}
-                </button>
-                {bioMsg && (
-                  <p
-                    className={`mt-2 text-xs ${
-                      bioMsg.startsWith("Biometrics error")
-                        ? "text-[var(--vigil-danger)]"
-                        : bioMsg.startsWith("Biometrics OK")
-                          ? "text-[var(--vigil-success)]"
-                          : "text-[var(--vigil-muted)]"
-                    }`}
-                  >
-                    {bioMsg}
-                  </p>
+                {!isDeviceAuthEnabled() ? (
+                  <div className="text-sm">
+                    <div className="font-medium">Device unlock paused</div>
+                    <p className="mt-1 text-xs text-[var(--vigil-muted)]">
+                      No Touch ID / Keychain / password prompts. API keys are
+                      stored in a local app file only — Keychain is not used.
+                      If chat says the key is missing, paste and save it here
+                      once. Account login will replace this later.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <label className="flex items-center justify-between gap-3 text-sm">
+                      <span>
+                        Use {bioStatus?.label ?? "Biometrics"} before key access
+                        <div className="text-xs text-[var(--vigil-muted)]">
+                          Layer 1: device auth · Layer 2:{" "}
+                          {bioStatus?.vaultLabel ?? "OS secure storage"}
+                          {bioStatus?.message ? ` — ${bioStatus.message}` : ""}
+                        </div>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={useBio}
+                        onChange={(e) => {
+                          setUseBio(e.target.checked);
+                          setBiometricEnabled(e.target.checked);
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="mt-2 rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs disabled:opacity-50"
+                      disabled={bioBusy}
+                      onClick={() => {
+                        setError(null);
+                        setBioMsg("Waiting for authentication…");
+                        setBioBusy(true);
+                        void testBiometric("Unlock Vigil AI Agent")
+                          .then((result) =>
+                            setBioMsg(
+                              result.authenticated === true
+                                ? "Biometrics OK — native dialog completed successfully."
+                                : `Biometrics denied (${result.detail}).`,
+                            ),
+                          )
+                          .catch((err) => {
+                            const msg =
+                              err instanceof Error ? err.message : String(err);
+                            setBioMsg(`Biometrics error: ${msg}`);
+                            setError(msg);
+                          })
+                          .finally(() => setBioBusy(false));
+                      }}
+                    >
+                      {bioBusy ? "Waiting…" : "Test biometric"}
+                    </button>
+                    {bioMsg && (
+                      <p
+                        className={`mt-2 text-xs ${
+                          bioMsg.startsWith("Biometrics error")
+                            ? "text-[var(--vigil-danger)]"
+                            : bioMsg.startsWith("Biometrics OK")
+                              ? "text-[var(--vigil-success)]"
+                              : "text-[var(--vigil-muted)]"
+                        }`}
+                      >
+                        {bioMsg}
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
 
