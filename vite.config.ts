@@ -56,7 +56,7 @@ export default defineConfig(() => ({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "sidecar/**/*.test.mjs"],
     // Vitest runs in Node — allow resolving @cline/* for Phase 0 tests.
     server: {
       deps: {

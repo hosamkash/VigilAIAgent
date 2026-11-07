@@ -1,6 +1,9 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type MouseEvent } from "react";
+import { openAndRevealFile } from "../lib/open-workspace-file";
+import { useEditorTabsStore } from "../store/editorTabsStore";
+import { useExplorerStore } from "../store/explorerStore";
 
 function CodeBlock({
   className,
@@ -42,14 +45,48 @@ function CodeBlock({
   );
 }
 
+function looksLikeWorkspacePath(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.includes("://") || t.includes(" ")) return false;
+  if (!/[./\\]/.test(t)) return false;
+  return /\.[A-Za-z0-9]{1,12}$/.test(t) || t.startsWith("src/") || t.startsWith("./");
+}
+
+function resolveClickPath(raw: string): string {
+  const path = raw.trim().replace(/^`+|`+$/g, "");
+  const root = useExplorerStore.getState().root?.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!root) return path;
+  const norm = path.replace(/\\/g, "/");
+  if (norm.startsWith("/") || /^[A-Za-z]:\//.test(norm)) return path;
+  return `${root}/${norm.replace(/^\.\//, "")}`;
+}
+
 export function MarkdownMessage({ content }: { content: string }) {
   return (
     <div className="vigil-md text-sm leading-relaxed">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={(url) => url}
         components={{
           code({ className, children, ...props }) {
             const isBlock = Boolean(className) || String(children).includes("\n");
+            const text = String(children ?? "").replace(/\n$/, "");
+            if (!isBlock && looksLikeWorkspacePath(text)) {
+              return (
+                <button
+                  type="button"
+                  title={`Open ${text}`}
+                  className="cursor-pointer rounded border-0 bg-[var(--vigil-hover)] px-1 py-0.5 font-mono text-[12px] text-[var(--vigil-accent)] underline"
+                  onClick={(event: MouseEvent) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void openAndRevealFile(resolveClickPath(text));
+                  }}
+                >
+                  {text}
+                </button>
+              );
+            }
             if (!isBlock) {
               return (
                 <code
@@ -63,15 +100,43 @@ export function MarkdownMessage({ content }: { content: string }) {
             return <CodeBlock className={className}>{children}</CodeBlock>;
           },
           a({ href, children }) {
+            // Never open the system browser for chat file links.
+            const label = String(children ?? href ?? "");
+            if (href?.startsWith("vigil-file:") || looksLikeWorkspacePath(label)) {
+              const path = href?.startsWith("vigil-file:")
+                ? decodeURIComponent(
+                    href.replace(/^vigil-file:\/\//, "").replace(/^vigil-file:/, ""),
+                  )
+                : resolveClickPath(label);
+              return (
+                <button
+                  type="button"
+                  title={`Open ${path}`}
+                  className="cursor-pointer border-0 bg-transparent p-0 font-mono text-[12px] text-[var(--vigil-accent)] underline"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void openAndRevealFile(path);
+                  }}
+                >
+                  {children}
+                </button>
+              );
+            }
+            const web = href && /^https?:\/\//i.test(href) ? href : null;
             return (
-              <a
-                href={href}
-                className="text-[var(--vigil-accent)] underline"
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                className="border-0 bg-transparent p-0 text-[var(--vigil-accent)] underline"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (web) useEditorTabsStore.getState().openBrowser(web);
+                }}
+                title={web ? `Open in Vigil Browser: ${web}` : href}
               >
                 {children}
-              </a>
+              </button>
             );
           },
           ul({ children }) {

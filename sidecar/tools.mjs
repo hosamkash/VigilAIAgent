@@ -1,6 +1,34 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import {
+  browser_navigate,
+  browser_snapshot,
+  browser_click,
+  browser_type,
+  browser_press,
+  browser_screenshot,
+  browser_tabs,
+  browser_select_option,
+  browser_wait,
+  browser_close,
+  detectProjectUrl,
+} from "./browser.mjs";
+import {
+  app_launch,
+  app_attach,
+  app_snapshot,
+  app_click,
+  app_type,
+  app_read,
+  app_wait,
+  app_close,
+} from "./desktop-app.mjs";
+
+function unwrapApp(result) {
+  if (!result?.ok) throw new Error(result?.error || "desktop app tool failed");
+  return result.output || "ok";
+}
 
 export async function list_files(dirPath = ".", cwd = process.cwd()) {
   try {
@@ -25,9 +53,10 @@ export async function read_file(filePath, cwd = process.cwd()) {
   }
 }
 
-export async function write_file(filePath, content, cwd = process.cwd()) {
+export async function write_file(filePath, content, cwd = process.cwd(), remember) {
   try {
     const abs = path.resolve(cwd, filePath);
+    if (typeof remember === "function") await remember(abs);
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, content, "utf8");
     return { ok: true, output: `Wrote ${filePath}`, path: filePath, content };
@@ -70,8 +99,9 @@ export async function run_command(command, cwd = process.cwd(), timeoutMs = 60_0
   });
 }
 
-/** Build ClineCore `extraTools` from Vigil MVP tools. */
-export function buildVigilExtraTools(cwd, onWrite) {
+/** Build ClineCore `extraTools` from Vigil MVP tools (+ browser automation). */
+export function buildVigilExtraTools(cwd, onWrite, remember, emit) {
+  const fire = typeof emit === "function" ? emit : () => {};
   return [
     {
       name: "list_files",
@@ -120,13 +150,330 @@ export function buildVigilExtraTools(cwd, onWrite) {
       },
       executionMode: "sequential",
       execute: async (input) => {
-        const result = await write_file(input.path, input.content ?? "", cwd);
+        const result = await write_file(input.path, input.content ?? "", cwd, remember);
         if (!result.ok) throw new Error(result.error || "write_file failed");
         if (typeof onWrite === "function") {
           onWrite({ path: input.path, content: input.content ?? "" });
         }
         return result.output;
       },
+    },
+    {
+      name: "browser_open",
+      description:
+        "REQUIRED when the user asks to open a browser, preview, localhost, or a link inside Vigil. " +
+        "Opens Vigil Browser (the built-in IDE preview tab) immediately — you control this yourself. " +
+        "Do NOT tell the user to use Command Palette, Simple Browser: Show, Cmd+Shift+P, or any manual steps. " +
+        "Do NOT open the OS/system browser. Pass url 'project' to auto-detect the workspace preview URL.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description:
+              "URL to show in Vigil Browser (e.g. http://localhost:4300). Use 'project' to auto-detect.",
+          },
+        },
+        required: ["url"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        let url = input.url;
+        if (!url || String(url).trim().toLowerCase() === "project") {
+          url = await detectProjectUrl(cwd);
+        }
+        url = String(url).trim();
+        if (
+          url.startsWith("localhost") ||
+          url.startsWith("127.") ||
+          /^\d{1,3}(\.\d{1,3}){3}/.test(url)
+        ) {
+          url = url.includes("://") ? url : `http://${url}`;
+        } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) {
+          url = `https://${url}`;
+        }
+        fire({ type: "tool", toolName: "browser_open", url });
+        return `Opened Vigil Browser at ${url}`;
+      },
+    },
+    {
+      name: "browser_navigate",
+      description:
+        "For opening a page the user should SEE: use browser_open instead (in-editor only). " +
+        "This tool runs headless automation only (no visible OS browser window) and also " +
+        "updates the in-editor Vigil Browser tab. Use for click/type/screenshot workflows. " +
+        "Never open Chrome/Chromium visibly unless headless=false is explicitly requested.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description:
+              "URL to open. Pass 'project' to auto-detect the workspace preview URL.",
+          },
+          headless: {
+            type: "boolean",
+            description: "Default true. Set false only if the user asks for a visible automation browser.",
+          },
+          cdpUrl: {
+            type: "string",
+            description: "Attach to an existing browser via CDP (default http://127.0.0.1:9222)",
+          },
+        },
+        required: ["url"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        let url = input.url;
+        if (!url || String(url).trim().toLowerCase() === "project") {
+          url = await detectProjectUrl(cwd);
+        }
+        // Always mirror into the in-editor tab. Automation stays headless by default.
+        fire({ type: "tool", toolName: "browser_open", url });
+        const result = await browser_navigate(
+          { ...input, url, headless: input.headless !== false },
+          fire,
+        );
+        return result.output;
+      },
+    },
+    {
+      name: "browser_snapshot",
+      description:
+        "Capture the current page accessibility tree with element refs for click/type.",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "parallel",
+      execute: async () => {
+        const result = await browser_snapshot();
+        return result.output;
+      },
+    },
+    {
+      name: "browser_click",
+      description: "Click an element by ref from the latest browser_snapshot (e.g. e3).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ref: { type: "string", description: "Element ref like e1" },
+        },
+        required: ["ref"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const result = await browser_click(input);
+        return result.output;
+      },
+    },
+    {
+      name: "browser_type",
+      description: "Type text into an element by ref. Clears existing value by default.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ref: { type: "string" },
+          text: { type: "string" },
+          submit: { type: "boolean", description: "Press Enter after typing" },
+          clear: { type: "boolean", description: "Clear field first (default true)" },
+        },
+        required: ["ref", "text"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const result = await browser_type(input);
+        return result.output;
+      },
+    },
+    {
+      name: "browser_press",
+      description: "Press a keyboard key (Enter, Escape, Tab, ArrowDown…). Optional ref focuses first.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          key: { type: "string" },
+          ref: { type: "string" },
+        },
+        required: ["key"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const result = await browser_press(input);
+        return result.output;
+      },
+    },
+    {
+      name: "browser_screenshot",
+      description: "Take a PNG screenshot of the current page and send it to the IDE.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fullPage: { type: "boolean" },
+        },
+      },
+      executionMode: "parallel",
+      execute: async (input = {}) => {
+        const result = await browser_screenshot(input, fire);
+        return result.output;
+      },
+    },
+    {
+      name: "browser_tabs",
+      description: "List open browser tabs and connection mode (cdp / channel / bundled).",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "parallel",
+      execute: async () => {
+        const result = await browser_tabs();
+        return result.output;
+      },
+    },
+    {
+      name: "browser_select_option",
+      description: "Select option(s) in a <select> by ref.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ref: { type: "string" },
+          value: { type: "string" },
+          values: { type: "array", items: { type: "string" } },
+        },
+        required: ["ref"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const result = await browser_select_option(input);
+        return result.output;
+      },
+    },
+    {
+      name: "browser_wait",
+      description: "Wait a short time (ms) then re-snapshot. Max 30000.",
+      inputSchema: {
+        type: "object",
+        properties: { ms: { type: "number" } },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        const result = await browser_wait(input);
+        return result.output;
+      },
+    },
+    {
+      name: "browser_close",
+      description: "Close the Vigil-controlled browser session.",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "sequential",
+      execute: async () => {
+        const result = await browser_close();
+        return result.output;
+      },
+    },
+    {
+      name: "app_launch",
+      description:
+        "Windows only. Launch a WinForms / DevExpress desktop .exe for UI testing. " +
+        "Pass path to the exe, or 'project' to auto-detect under bin/Debug|Release. " +
+        "Then use app_snapshot → app_click / app_type / app_read.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Path to .exe, or 'project' to auto-detect",
+          },
+          args: { type: "string", description: "Optional process arguments" },
+        },
+        required: ["path"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => unwrapApp(await app_launch(input, cwd)),
+    },
+    {
+      name: "app_attach",
+      description:
+        "Windows only. Attach to an already-running desktop app by pid or process/window name.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pid: { type: "number" },
+          name: { type: "string", description: "Process or window title substring" },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => unwrapApp(await app_attach(input)),
+    },
+    {
+      name: "app_snapshot",
+      description:
+        "Windows only. Capture the desktop app UI tree with element refs [e1], [e2]… " +
+        "(buttons, edits, combos, menu items — including many DevExpress controls).",
+      inputSchema: {
+        type: "object",
+        properties: { max: { type: "number", description: "Max elements (default 100)" } },
+      },
+      executionMode: "parallel",
+      execute: async (input = {}) => unwrapApp(await app_snapshot(input)),
+    },
+    {
+      name: "app_click",
+      description: "Windows only. Click a desktop UI element by ref from app_snapshot.",
+      inputSchema: {
+        type: "object",
+        properties: { ref: { type: "string" } },
+        required: ["ref"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapApp(await app_click(input)),
+    },
+    {
+      name: "app_type",
+      description:
+        "Windows only. Type into a desktop field by ref. Clears existing value by default.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ref: { type: "string" },
+          text: { type: "string" },
+          clear: { type: "boolean" },
+          submit: { type: "boolean", description: "Press Enter after typing" },
+        },
+        required: ["ref", "text"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapApp(await app_type(input)),
+    },
+    {
+      name: "app_read",
+      description: "Windows only. Read name/value/automationId of an element by ref.",
+      inputSchema: {
+        type: "object",
+        properties: { ref: { type: "string" } },
+        required: ["ref"],
+      },
+      executionMode: "parallel",
+      execute: async (input) => unwrapApp(await app_read(input)),
+    },
+    {
+      name: "app_wait",
+      description:
+        "Windows only. Wait until an element name/AutomationId appears (or just sleep ms).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ms: { type: "number" },
+          nameContains: { type: "string" },
+          name: { type: "string" },
+          automationId: { type: "string" },
+          id: { type: "string" },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => unwrapApp(await app_wait(input)),
+    },
+    {
+      name: "app_close",
+      description: "Windows only. Close the attached/launched desktop app and stop the UI driver.",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "sequential",
+      execute: async () => unwrapApp(await app_close()),
     },
   ];
 }

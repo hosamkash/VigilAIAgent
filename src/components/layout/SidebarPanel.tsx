@@ -1,4 +1,5 @@
 import { useLayoutStore } from "../../store/layoutStore";
+import { PaneToggleButton } from "./PaneToggleButton";
 import { FileExplorer } from "./FileExplorer";
 import { SearchSidebar } from "./panels/SearchSidebar";
 import { ScmSidebar } from "./panels/ScmSidebar";
@@ -12,10 +13,17 @@ export function SidebarPanel({ fill = false }: { fill?: boolean }) {
 
   return (
     <aside
-      className={`flex h-full min-h-0 flex-col border-r border-[var(--vigil-border)] bg-[var(--vigil-sidebar)] ${
+      className={`relative flex h-full min-h-0 flex-col border-r border-[var(--vigil-border)] bg-[var(--vigil-sidebar)] ${
         fill ? "w-full" : "w-[260px] shrink-0"
       }`}
     >
+      <div className="absolute top-1.5 right-1.5 z-10">
+        <PaneToggleButton
+          direction="left"
+          label="Collapse sidebar"
+          onClick={() => useLayoutStore.getState().toggleSidebar()}
+        />
+      </div>
       {sidebarView === "explorer" && <FileExplorer />}
       {sidebarView === "search" && <SearchSidebar />}
       {sidebarView === "scm" && <ScmSidebar />}

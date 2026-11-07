@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const authState = vi.hoisted(() => ({ enabled: true }));
+
 vi.mock("../lib/secure-storage", () => ({
+  isDeviceAuthEnabled: () => authState.enabled,
   hasApiKey: vi.fn(),
   listConfiguredProviders: vi.fn(async () => []),
   saveApiKey: vi.fn(),
@@ -11,11 +14,16 @@ vi.mock("../lib/secure-storage", () => ({
   isSettingsGateOpen: vi.fn(async () => false),
 }));
 
-import { testBiometric, verifyDevicePassword } from "../lib/secure-storage";
+import {
+  testBiometric,
+  unlockSettingsGate,
+  verifyDevicePassword,
+} from "../lib/secure-storage";
 import { useSettingsStore } from "./settingsStore";
 
 describe("settings unlock gate", () => {
   beforeEach(() => {
+    authState.enabled = true;
     useSettingsStore.setState({
       view: "chat",
       settingsUnlocked: false,
@@ -27,6 +35,20 @@ describe("settings unlock gate", () => {
     });
     vi.mocked(testBiometric).mockReset();
     vi.mocked(verifyDevicePassword).mockReset();
+    vi.mocked(unlockSettingsGate).mockClear();
+  });
+
+  it("opens Settings with no device auth when the gate is disabled", async () => {
+    authState.enabled = false;
+    useSettingsStore.getState().openSettingsGate();
+    await vi.waitFor(() => {
+      const s = useSettingsStore.getState();
+      expect(s.settingsUnlocked).toBe(true);
+      expect(s.view).toBe("settings");
+    });
+    expect(testBiometric).not.toHaveBeenCalled();
+    expect(verifyDevicePassword).not.toHaveBeenCalled();
+    expect(unlockSettingsGate).toHaveBeenCalled();
   });
 
   it("does not open Settings when authenticated is false (cancel/deny)", async () => {
@@ -43,7 +65,6 @@ describe("settings unlock gate", () => {
   });
 
   it("opens Settings only when authenticated is exact true", async () => {
-    const { unlockSettingsGate } = await import("../lib/secure-storage");
     vi.mocked(testBiometric).mockResolvedValue({
       authenticated: true,
       detail: "ok",
@@ -70,7 +91,6 @@ describe("settings unlock gate", () => {
   });
 
   it("unlocks Settings when device password verifies", async () => {
-    const { unlockSettingsGate } = await import("../lib/secure-storage");
     vi.mocked(verifyDevicePassword).mockResolvedValue({
       authenticated: true,
       detail: "ok",

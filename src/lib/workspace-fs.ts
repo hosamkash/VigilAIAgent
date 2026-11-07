@@ -39,6 +39,22 @@ export async function runWorkspaceCommand(
   return invoke<string>("run_workspace_command", { command, cwd: root });
 }
 
+export type TerminalStreamEvent = {
+  runId: string;
+  kind: "chunk" | "done" | string;
+  text?: string | null;
+  code?: number | null;
+};
+
+/** Start a command that streams to the `vigil-terminal` event. Returns immediately. */
+export async function startWorkspaceCommand(
+  command: string,
+  cwd: string,
+  runId: string,
+): Promise<void> {
+  await invoke("start_workspace_command", { command, cwd, runId });
+}
+
 export function languageFromPath(filePath: string): string {
   const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {

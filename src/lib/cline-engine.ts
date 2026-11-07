@@ -49,6 +49,13 @@ export interface VigilEngineOptions {
   model?: RoutedModel;
   /** Optional preloaded keys (tests). Prefer getApiKey in production. */
   apiKeys?: Partial<Record<LlmProviderId, string>>;
+  /** Stops the in-flight sidecar read when the user cancels. */
+  signal?: AbortSignal;
+  /** User message this command belongs to. The sidecar stores the file snapshot under this id. */
+  checkpointId?: string;
+  checkpointAt?: number;
+  /** Extra reply-style instructions from chat preferences. */
+  replyStyle?: string;
 }
 
 export type VigilStreamEvent =
@@ -56,15 +63,25 @@ export type VigilStreamEvent =
   | { type: "status"; status: string }
   | { type: "session"; sessionId: string }
   | { type: "chunk"; stream?: string; text: string }
+  | { type: "agent_event"; event?: unknown }
   | {
       type: "tool";
       toolName?: string;
       path?: string;
       content?: string;
+      url?: string;
+      title?: string;
+      imageBase64?: string;
       hook?: string;
       event?: unknown;
     }
-  | { type: "done"; sessionId?: string; text?: string; toolCalls?: unknown[] }
+  | {
+      type: "done";
+      sessionId?: string;
+      text?: string;
+      toolCalls?: unknown[];
+      usage?: { inputTokens: number; outputTokens: number; cost: number };
+    }
   | { type: "error"; message: string }
   | { type: "warning"; message: string }
   | { type: "event"; event: unknown };
@@ -116,6 +133,37 @@ async function resolveApiKey(
   }
 }
 
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError")
+  );
+}
+
+/** Reject as soon as `signal` aborts, even if `promise` never settles. */
+export function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("The operation was stopped.", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      reject(new DOMException("The operation was stopped.", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 /** Prefer Tauri HTTP plugin (scoped); fall back to global fetch in plain browser. */
 async function sidecarFetch(
   url: string,
@@ -123,7 +171,8 @@ async function sidecarFetch(
 ): Promise<Response> {
   try {
     return await tauriFetch(url, init);
-  } catch {
+  } catch (err) {
+    if (init.signal?.aborted || isAbortError(err)) throw err;
     return fetch(url, init);
   }
 }
@@ -143,13 +192,19 @@ export async function* runVigilTask(
       preferredProvider: options.preferredProvider,
     });
 
+  const signal = options.signal;
   yield { type: "routed", routed };
 
-  await spawnSidecar();
-  const apiKey = await resolveApiKey(routed.providerId, options.apiKeys);
-  const secret = await getLaunchSecret();
-  const session = await getLaunchSession();
-  const cwd = options.cwd ?? (await getWorkspaceCwd().catch(() => undefined));
+  await withAbort(spawnSidecar(), signal);
+  const apiKey = await withAbort(
+    resolveApiKey(routed.providerId, options.apiKeys),
+    signal,
+  );
+  const secret = await withAbort(getLaunchSecret(), signal);
+  const session = await withAbort(getLaunchSession(), signal);
+  const cwd =
+    options.cwd ??
+    (await withAbort(getWorkspaceCwd().catch(() => undefined), signal));
 
   const bodyObj = {
     op: "run_task",
@@ -160,19 +215,26 @@ export async function* runVigilTask(
     apiKey,
     cwd,
     clientName: options.clientName ?? "vigil-agent",
+    checkpointId: options.checkpointId,
+    checkpointAt: options.checkpointAt,
+    replyStyle: options.replyStyle,
   };
   const body = JSON.stringify(bodyObj);
   const hmac = await signSidecarBody(secret, session.sessionId, body);
 
-  const res = await sidecarFetch(SIDECAR_RUN_TASK, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-vigil-hmac": hmac,
-      "x-vigil-session": session.sessionId,
-    },
-    body,
-  });
+  const res = await withAbort(
+    sidecarFetch(SIDECAR_RUN_TASK, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vigil-hmac": hmac,
+        "x-vigil-session": session.sessionId,
+      },
+      body,
+      signal,
+    }),
+    signal,
+  );
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -191,22 +253,47 @@ export async function* runVigilTask(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const stopReading = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+  signal?.addEventListener("abort", stopReading);
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        throw new DOMException("The operation was stopped.", "AbortError");
+      }
+      let done = false;
+      let value: Uint8Array | undefined;
       try {
-        yield JSON.parse(trimmed) as VigilStreamEvent;
-      } catch {
-        yield { type: "chunk", text: trimmed };
+        const next = await reader.read();
+        done = next.done;
+        value = next.value;
+      } catch (err) {
+        if (signal?.aborted || isAbortError(err)) {
+          throw new DOMException("The operation was stopped.", "AbortError");
+        }
+        throw err;
+      }
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (signal?.aborted) {
+          throw new DOMException("The operation was stopped.", "AbortError");
+        }
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          yield JSON.parse(trimmed) as VigilStreamEvent;
+        } catch {
+          yield { type: "chunk", text: trimmed };
+        }
       }
     }
+  } finally {
+    signal?.removeEventListener("abort", stopReading);
   }
 
   if (buffer.trim()) {

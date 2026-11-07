@@ -20,6 +20,8 @@ import {
   write_file,
   buildVigilExtraTools,
 } from "./tools.mjs";
+import { createCheckpointWriter, installWriteCapture } from "./checkpoints.mjs";
+import { AgentTextStream } from "./agent-stream.mjs";
 
 const PORT = Number(process.env.VIGIL_SIDECAR_PORT || 47821);
 const SECRET = process.env.VIGIL_LAUNCH_SECRET || "";
@@ -106,17 +108,23 @@ function normalizeModelId(raw) {
   return modelId;
 }
 
+const GEMINI_ALIASES = {
+  "gemini-3.8-pro": "gemini-3.1-pro-preview",
+  "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+};
+
 const GEMINI_FALLBACKS = [
   "gemini-3.8-flash",
-  "gemini-3.8-pro",
   "gemini-3.1-pro-preview",
-  "gemini-2.0-flash-exp",
-  "gemini-1.5-flash",
-  "gemini-1.5-pro",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
 ];
 
 function geminiModelCandidates(primary) {
-  const first = normalizeModelId(primary) || "gemini-3.8-flash";
+  const raw = normalizeModelId(primary) || "gemini-3.8-flash";
+  const first = GEMINI_ALIASES[raw] || raw;
   const rest = GEMINI_FALLBACKS.filter((m) => m !== first);
   return [first, ...rest];
 }
@@ -127,6 +135,7 @@ function isModelUnavailableError(err) {
     msg.includes("no longer available") ||
     msg.includes("not found") ||
     msg.includes("is not found") ||
+    msg.includes("is not supported for generatecontent") ||
     msg.includes("invalid model") ||
     msg.includes("unknown model") ||
     msg.includes("404") ||
@@ -168,7 +177,26 @@ function resolveProviderAndModel(payload) {
   return { providerId, modelId };
 }
 
-async function startWithModel(cline, { providerId, modelId, apiKey, cwd, prompt, extraTools }) {
+async function startWithModel(cline, { providerId, modelId, apiKey, cwd, prompt, extraTools, replyStyle }) {
+  const style = typeof replyStyle === "string" ? replyStyle.trim() : "";
+  const systemPrompt =
+    "You are Vigil, a personal desktop AI coding agent. Be actionable. " +
+    "Prefer the write_file / read_file / list_files tools for filesystem work. " +
+    "When asked to create a file, call write_file immediately with the full contents. " +
+    "Vigil Browser is the in-editor preview tab only. When the user asks to open a browser, " +
+    "preview, localhost, a module, or a tool page: call browser_open with the full URL " +
+    "(or 'project'). That updates the IDE tab — nothing outside Vigil. " +
+    "NEVER launch Chrome, Chromium, Safari, or any OS browser window. " +
+    "NEVER use terminal open/xdg-open. Prefer browser_open over browser_navigate for viewing. " +
+    "If you need click/type automation on a website, browser_navigate runs headless (invisible) and still " +
+    "updates Vigil Browser via browser_open. Never tell the user to use Command Palette. " +
+    "For Windows WinForms/DevExpress desktop apps: use app_launch (path or 'project') → " +
+    "app_snapshot → app_click / app_type / app_read / app_wait to open screens, fill fields, save, " +
+    "and report results. Desktop tools work on Windows only. " +
+    "Always reply in the same language as the user's latest message " +
+    "(Arabic→Arabic, English→English, and the same for every other language). " +
+    "Do not switch languages unless the user asks. Keep code and paths unchanged." +
+    (style ? `\n\n${style}` : "");
   return cline.start({
     config: {
       providerId,
@@ -180,10 +208,7 @@ async function startWithModel(cline, { providerId, modelId, apiKey, cwd, prompt,
       enableSpawnAgent: false,
       enableAgentTeams: false,
       yolo: true,
-      systemPrompt:
-        "You are Vigil, a personal desktop AI coding agent. Be concise and actionable. " +
-        "Prefer the write_file / read_file / list_files tools for filesystem work. " +
-        "When asked to create a file, call write_file immediately with the full contents.",
+      systemPrompt,
       extraTools,
     },
     prompt,
@@ -223,26 +248,54 @@ async function runClineTask(payload, emit) {
     backendMode: "local",
   });
 
-  const extraTools = buildVigilExtraTools(cwd, (write) => {
-    emit({
-      type: "tool",
-      toolName: "write_file",
-      path: write.path,
-      content: write.content,
-    });
+  const checkpoint = payload.checkpointId
+    ? createCheckpointWriter({
+        id: payload.checkpointId,
+        workspace: cwd,
+        createdAt: Number(payload.checkpointAt) || Date.now(),
+      })
+    : null;
+  const releaseCapture = checkpoint
+    ? installWriteCapture(checkpoint.remember, checkpoint.rememberSync)
+    : () => {};
+
+  const extraTools = buildVigilExtraTools(
+    cwd,
+    (write) => {
+      emit({
+        type: "tool",
+        toolName: "write_file",
+        path: write.path,
+        content: write.content,
+      });
+    },
+    checkpoint?.remember,
+    emit,
+  );
+  emit({
+    type: "status",
+    status: `vigil_tools=${extraTools.map((t) => t.name).join(",")}`,
   });
+
+  const visible = new AgentTextStream();
+  let sent = "";
+  const emitAnswer = () => {
+    const next = visible.text;
+    if (!next.startsWith(sent) || next.length === sent.length) return;
+    emit({ type: "chunk", stream: "agent", text: next.slice(sent.length) });
+    sent = next;
+  };
 
   const unsub = cline.subscribe((event) => {
     try {
       if (event.type === "chunk") {
-        emit({
-          type: "chunk",
-          stream: event.payload?.stream,
-          text: event.payload?.chunk ?? "",
-        });
+        visible.push(event.payload?.chunk ?? "");
+        emitAnswer();
       } else if (event.type === "agent_event") {
         const inner = event.payload?.event;
-        emit({ type: "agent_event", event: inner });
+        if (typeof inner === "string") visible.push(inner);
+        else if (inner && typeof inner === "object") visible.push(JSON.stringify(inner));
+        emitAnswer();
       } else if (event.type === "hook") {
         emit({
           type: "tool",
@@ -274,7 +327,19 @@ async function runClineTask(payload, emit) {
           cwd,
           prompt,
           extraTools,
+          replyStyle: payload.replyStyle,
         });
+        const resultText = started?.result?.text ?? "";
+        // Some SDKs return the 404 as answer text instead of throwing.
+        if (providerId === "gemini" && isModelUnavailableError(resultText)) {
+          lastErr = new Error(resultText || `Model ${candidate} unavailable`);
+          emit({
+            type: "warning",
+            message: `Model ${candidate} unavailable, trying fallback…`,
+          });
+          started = null;
+          continue;
+        }
         usedModel = candidate;
         lastErr = null;
         break;
@@ -301,10 +366,8 @@ async function runClineTask(payload, emit) {
       modelId: usedModel,
     });
 
-    const text = started.result?.text ?? "";
-    if (text) {
-      emit({ type: "chunk", stream: "agent", text });
-    }
+    const text = visible.adoptFinal(started.result?.text ?? "");
+    emitAnswer();
     const toolCalls = started.result?.toolCalls ?? [];
     emit({
       type: "done",
@@ -312,6 +375,7 @@ async function runClineTask(payload, emit) {
       text,
       toolCalls,
       modelId: usedModel,
+      usage: visible.usage ?? undefined,
     });
     return { sessionId: started.sessionId, text, toolCalls, modelId: usedModel };
   } finally {
@@ -325,6 +389,7 @@ async function runClineTask(payload, emit) {
     } catch {
       /* ignore */
     }
+    releaseCapture();
   }
 }
 

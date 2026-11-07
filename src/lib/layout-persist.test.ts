@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LAYOUT,
   loadLayoutSizes,
+  mergeHorizontalSizes,
   saveLayoutSizes,
   sizesToPercents,
 } from "./layout-persist";
@@ -34,6 +35,14 @@ describe("layout persistence", () => {
     const loaded = loadLayoutSizes();
     expect(loaded.horizontal[0]).toBeCloseTo(25, 0);
     expect(loaded.vertical[1]).toBeCloseTo(35, 0);
+  });
+
+  it("keeps the saved split while a side pane is collapsed", () => {
+    expect(mergeHorizontalSizes([0, 800, 300], false, true)).toBeNull();
+    expect(mergeHorizontalSizes([240, 900, 0], true, false)).toBeNull();
+    const next = mergeHorizontalSizes([220, 480, 300], true, true);
+    expect(next?.[0]).toBeCloseTo(22, 0);
+    expect(next?.[2]).toBeCloseTo(30, 0);
   });
 
   it("converts pixel sizes to percents", () => {

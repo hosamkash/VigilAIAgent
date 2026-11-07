@@ -7,10 +7,22 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ApiKeyProvider = "openai" | "gemini" | "anthropic";
 
+/**
+ * Device biometric / password gate.
+ * Off until account login ships — no Touch ID, no password, no unlock screen.
+ * Flip the constant when wiring signed-in user auth (once per session).
+ */
+const DEVICE_AUTH_FLAG = false;
+
+export function isDeviceAuthEnabled(): boolean {
+  return DEVICE_AUTH_FLAG;
+}
+
 const BIOMETRIC_PREF_KEY = "vigil.useBiometric";
 const FAIL_COUNT_KEY = "vigil.biometricFails";
 
 export function isBiometricEnabled(): boolean {
+  if (!isDeviceAuthEnabled()) return false;
   try {
     return localStorage.getItem(BIOMETRIC_PREF_KEY) !== "0";
   } catch {
@@ -19,6 +31,7 @@ export function isBiometricEnabled(): boolean {
 }
 
 export function setBiometricEnabled(on: boolean): void {
+  if (!isDeviceAuthEnabled()) return;
   try {
     localStorage.setItem(BIOMETRIC_PREF_KEY, on ? "1" : "0");
     if (on) localStorage.setItem(FAIL_COUNT_KEY, "0");
@@ -58,15 +71,30 @@ function shouldRequireBiometric(): boolean {
   return isBiometricEnabled() && biometricFailCount() < 3;
 }
 
+/** Session cache — avoids re-invoking Rust/Keychain on every chat turn. */
+const apiKeyMem = new Map<ApiKeyProvider, string>();
+
+function rememberApiKey(provider: ApiKeyProvider, apiKey: string): void {
+  if (apiKey.trim()) apiKeyMem.set(provider, apiKey.trim());
+}
+
 export async function saveApiKey(
   provider: ApiKeyProvider,
   apiKey: string,
 ): Promise<void> {
+  if (!isDeviceAuthEnabled()) {
+    await invoke("save_api_key", { provider, apiKey });
+    rememberApiKey(provider, apiKey);
+    resetBiometricFail();
+    return;
+  }
+
   // If Settings was already unlocked with Touch ID, do NOT prompt again —
   // a second Keychain/password dialog is what felt like "login after fingerprint".
   const gateOpen = await isSettingsGateOpen().catch(() => false);
   if (gateOpen) {
     await invoke("save_api_key", { provider, apiKey });
+    rememberApiKey(provider, apiKey);
     resetBiometricFail();
     return;
   }
@@ -78,12 +106,14 @@ export async function saveApiKey(
       apiKey,
       requireBiometric: require,
     });
+    rememberApiKey(provider, apiKey);
     resetBiometricFail();
   } catch (err) {
     if (require) {
       const fails = bumpBiometricFail();
       if (fails >= 3) {
         await invoke("save_api_key", { provider, apiKey });
+        rememberApiKey(provider, apiKey);
         return;
       }
     }
@@ -109,17 +139,30 @@ export async function hasApiKey(provider: ApiKeyProvider): Promise<boolean> {
 }
 
 export async function deleteApiKey(provider: ApiKeyProvider): Promise<void> {
+  apiKeyMem.delete(provider);
   await invoke("delete_api_key", { provider });
 }
 
 /**
  * Read API key from OS vault (Layer 2).
- * Layer 1 presence prompt is skipped when Settings gate is already open.
+ * Layer 1 presence prompt is skipped when Settings gate is already open,
+ * and always skipped while device auth is disabled.
  */
 export async function getApiKey(provider: ApiKeyProvider): Promise<string> {
+  const cached = apiKeyMem.get(provider);
+  if (cached) return cached;
+
+  if (!isDeviceAuthEnabled()) {
+    const key = await invoke<string>("get_api_key", { provider });
+    rememberApiKey(provider, key);
+    resetBiometricFail();
+    return key;
+  }
+
   const gateOpen = await isSettingsGateOpen().catch(() => false);
   if (gateOpen) {
     const key = await invoke<string>("get_api_key", { provider });
+    rememberApiKey(provider, key);
     resetBiometricFail();
     return key;
   }
@@ -130,17 +173,33 @@ export async function getApiKey(provider: ApiKeyProvider): Promise<string> {
       provider,
       requireBiometric: require,
     });
+    rememberApiKey(provider, key);
     resetBiometricFail();
     return key;
   } catch (err) {
     if (require) {
       const fails = bumpBiometricFail();
       if (fails >= 3) {
-        return invoke<string>("get_api_key", { provider });
+        const key = await invoke<string>("get_api_key", { provider });
+        rememberApiKey(provider, key);
+        return key;
       }
     }
     throw err;
   }
+}
+
+/**
+ * Read API key WITHOUT biometric / Settings unlock.
+ * For chat helpers (voice STT, image enrich) so mic does not pop Touch ID every time.
+ * Uses the same session cache / local-file path as getApiKey when auth is off.
+ */
+export async function getApiKeyQuiet(provider: ApiKeyProvider): Promise<string> {
+  const cached = apiKeyMem.get(provider);
+  if (cached) return cached;
+  const key = await invoke<string>("get_api_key", { provider });
+  rememberApiKey(provider, key);
+  return key;
 }
 
 export async function getApiKeyHint(provider: ApiKeyProvider): Promise<string> {
