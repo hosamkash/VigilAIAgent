@@ -32,12 +32,10 @@ export function EditorGroup() {
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const revealDone = useRef<string | null>(null);
 
-  // Kill leftover native webviews that would cover the UI when not browsing.
+  // Never leave a child webview covering the IDE chrome.
   useEffect(() => {
     void destroyExtHostWebview();
-    if (active?.mode !== "browser") {
-      void destroyVigilEmbedWebview();
-    }
+    void destroyVigilEmbedWebview();
   }, [activeId, active?.mode]);
 
   useEffect(() => {

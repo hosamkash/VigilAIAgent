@@ -20,6 +20,7 @@ import {
   sizesToPercents,
 } from "./lib/layout-persist";
 import { destroyExtHostWebview } from "./lib/embedded-site";
+import { destroyVigilEmbedWebview } from "./lib/vigil-embed-webview";
 import { MenuBar } from "./components/layout/MenuBar";
 import { StatusBar } from "./components/layout/StatusBar";
 import { bindClipWorkspace, installClipCapture } from "./lib/clip-shelf";
@@ -39,6 +40,7 @@ function IdeShell() {
 
   useEffect(() => {
     void destroyExtHostWebview();
+    void destroyVigilEmbedWebview();
   }, []);
 
   useEffect(() => {

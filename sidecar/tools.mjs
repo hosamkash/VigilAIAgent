@@ -14,6 +14,21 @@ import {
   browser_close,
   detectProjectUrl,
 } from "./browser.mjs";
+import {
+  app_launch,
+  app_attach,
+  app_snapshot,
+  app_click,
+  app_type,
+  app_read,
+  app_wait,
+  app_close,
+} from "./desktop-app.mjs";
+
+function unwrapApp(result) {
+  if (!result?.ok) throw new Error(result?.error || "desktop app tool failed");
+  return result.output || "ok";
+}
 
 export async function list_files(dirPath = ".", cwd = process.cwd()) {
   try {
@@ -184,9 +199,10 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit) {
     {
       name: "browser_navigate",
       description:
-        "Launch/control the automation browser (Chrome/Edge or bundled Chromium) for click/type/screenshot testing. " +
-        "Also syncs Vigil Browser preview. Prefer browser_open when the user only wants to see a page. " +
-        "Returns an accessibility snapshot with refs [e1], [e2]…",
+        "For opening a page the user should SEE: use browser_open instead (in-editor only). " +
+        "This tool runs headless automation only (no visible OS browser window) and also " +
+        "updates the in-editor Vigil Browser tab. Use for click/type/screenshot workflows. " +
+        "Never open Chrome/Chromium visibly unless headless=false is explicitly requested.",
       inputSchema: {
         type: "object",
         properties: {
@@ -195,7 +211,10 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit) {
             description:
               "URL to open. Pass 'project' to auto-detect the workspace preview URL.",
           },
-          headless: { type: "boolean", description: "Run headless (default false / visible)" },
+          headless: {
+            type: "boolean",
+            description: "Default true. Set false only if the user asks for a visible automation browser.",
+          },
           cdpUrl: {
             type: "string",
             description: "Attach to an existing browser via CDP (default http://127.0.0.1:9222)",
@@ -209,9 +228,12 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit) {
         if (!url || String(url).trim().toLowerCase() === "project") {
           url = await detectProjectUrl(cwd);
         }
-        // Mirror into Vigil Browser so the user always sees the page in-IDE.
+        // Always mirror into the in-editor tab. Automation stays headless by default.
         fire({ type: "tool", toolName: "browser_open", url });
-        const result = await browser_navigate({ ...input, url }, fire);
+        const result = await browser_navigate(
+          { ...input, url, headless: input.headless !== false },
+          fire,
+        );
         return result.output;
       },
     },
@@ -343,6 +365,115 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit) {
         const result = await browser_close();
         return result.output;
       },
+    },
+    {
+      name: "app_launch",
+      description:
+        "Windows only. Launch a WinForms / DevExpress desktop .exe for UI testing. " +
+        "Pass path to the exe, or 'project' to auto-detect under bin/Debug|Release. " +
+        "Then use app_snapshot → app_click / app_type / app_read.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Path to .exe, or 'project' to auto-detect",
+          },
+          args: { type: "string", description: "Optional process arguments" },
+        },
+        required: ["path"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => unwrapApp(await app_launch(input, cwd)),
+    },
+    {
+      name: "app_attach",
+      description:
+        "Windows only. Attach to an already-running desktop app by pid or process/window name.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pid: { type: "number" },
+          name: { type: "string", description: "Process or window title substring" },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => unwrapApp(await app_attach(input)),
+    },
+    {
+      name: "app_snapshot",
+      description:
+        "Windows only. Capture the desktop app UI tree with element refs [e1], [e2]… " +
+        "(buttons, edits, combos, menu items — including many DevExpress controls).",
+      inputSchema: {
+        type: "object",
+        properties: { max: { type: "number", description: "Max elements (default 100)" } },
+      },
+      executionMode: "parallel",
+      execute: async (input = {}) => unwrapApp(await app_snapshot(input)),
+    },
+    {
+      name: "app_click",
+      description: "Windows only. Click a desktop UI element by ref from app_snapshot.",
+      inputSchema: {
+        type: "object",
+        properties: { ref: { type: "string" } },
+        required: ["ref"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapApp(await app_click(input)),
+    },
+    {
+      name: "app_type",
+      description:
+        "Windows only. Type into a desktop field by ref. Clears existing value by default.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ref: { type: "string" },
+          text: { type: "string" },
+          clear: { type: "boolean" },
+          submit: { type: "boolean", description: "Press Enter after typing" },
+        },
+        required: ["ref", "text"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapApp(await app_type(input)),
+    },
+    {
+      name: "app_read",
+      description: "Windows only. Read name/value/automationId of an element by ref.",
+      inputSchema: {
+        type: "object",
+        properties: { ref: { type: "string" } },
+        required: ["ref"],
+      },
+      executionMode: "parallel",
+      execute: async (input) => unwrapApp(await app_read(input)),
+    },
+    {
+      name: "app_wait",
+      description:
+        "Windows only. Wait until an element name/AutomationId appears (or just sleep ms).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ms: { type: "number" },
+          nameContains: { type: "string" },
+          name: { type: "string" },
+          automationId: { type: "string" },
+          id: { type: "string" },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => unwrapApp(await app_wait(input)),
+    },
+    {
+      name: "app_close",
+      description: "Windows only. Close the attached/launched desktop app and stop the UI driver.",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "sequential",
+      execute: async () => unwrapApp(await app_close()),
     },
   ];
 }

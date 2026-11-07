@@ -15,6 +15,11 @@ src-tauri/target
 .DS_Store
 *.bak
 
+# Vigil UI driver (Windows FlaUI) build output
+tools/vigil-ui-driver/bin/
+tools/vigil-ui-driver/obj/
+tools/vigil-ui-driver/publish/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -23,6 +23,8 @@ let page = null;
 let refMap = new Map();
 let launchedChild = null;
 let mode = "none"; // cdp | channel | bundled
+/** Default true — never pop a visible OS/Chromium window unless explicitly requested. */
+let preferHeadless = true;
 
 const DEFAULT_CDP = "http://127.0.0.1:9222";
 
@@ -104,11 +106,16 @@ async function sleep(ms) {
 async function ensurePage(opts = {}) {
   if (page && !page.isClosed()) return page;
 
+  const headless =
+    typeof opts.headless === "boolean" ? opts.headless : preferHeadless;
+  preferHeadless = headless;
+
   const cdpUrl = opts.cdpUrl || process.env.VIGIL_BROWSER_CDP || DEFAULT_CDP;
+  // Attach to an already-running debug browser only — never spawn a visible Chrome here.
   if (await tryConnectCdp(cdpUrl)) return page;
 
-  // Try launching the user's browser with CDP, then attach.
-  if (opts.preferSystem !== false) {
+  // Visible system Chrome only when the user explicitly asked for headed automation.
+  if (!headless && opts.preferSystem === true) {
     try {
       launchSystemChrome(9222);
       for (let i = 0; i < 20; i++) {
@@ -120,10 +127,9 @@ async function ensurePage(opts = {}) {
     }
   }
 
-  // Launch Playwright Chromium (bundled) — always available after install.
-  const channel = opts.channel; // chrome | msedge | chromium | undefined
+  const channel = opts.channel;
   const launchOpts = {
-    headless: opts.headless === true,
+    headless,
     args: ["--disable-blink-features=AutomationControlled"],
   };
   if (channel) launchOpts.channel = channel;
@@ -134,7 +140,7 @@ async function ensurePage(opts = {}) {
   } catch (err) {
     if (channel) {
       browser = await chromium.launch({
-        headless: opts.headless === true,
+        headless,
         args: launchOpts.args,
       });
       mode = "bundled";
@@ -280,8 +286,9 @@ export async function browser_navigate(input = {}, emit) {
   const p = await ensurePage({
     cdpUrl: input.cdpUrl,
     channel: input.channel,
-    headless: input.headless === true,
-    preferSystem: input.preferSystem,
+    // Default headless — do not open a visible Chromium/Chrome window.
+    headless: input.headless !== false,
+    preferSystem: input.preferSystem === true,
   });
   await p.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
   const title = await p.title().catch(() => "");
