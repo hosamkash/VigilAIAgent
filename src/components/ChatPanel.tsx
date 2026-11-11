@@ -12,16 +12,25 @@ import {
 import { createPortal } from "react-dom";
 import {
   useChatStore,
+  type ChatCommandResult,
   type ChatEditedFile,
   type ChatImageAttachment,
   type ChatMessage,
+  type ChatPlanItem,
+  type ChatPlanStatus,
 } from "../store/chatStore";
 import { useEditorTabsStore } from "../store/editorTabsStore";
 import { findChatByRequestId, useTabsStore, type ChatTab } from "../store/tabsStore";
 import { useCostStore } from "../store/costStore";
 import { useTerminalStore } from "../store/terminalStore";
 import { CHAT_MODEL_OPTIONS, chatModelLabel, routeTask } from "../lib/model-router";
-import { runVigilTask, withAbort } from "../lib/cline-engine";
+import {
+  respondToolApproval,
+  runVigilTask,
+  withAbort,
+} from "../lib/cline-engine";
+import { useAgentSettingsStore } from "../store/agentSettingsStore";
+import { readTextFile } from "../lib/workspace-fs";
 import { formatUsageLine, type UsageSnapshot } from "../lib/cost";
 import { AgentTextStream } from "../lib/agent-stream";
 import {
@@ -36,6 +45,8 @@ import { MessageVoiceBar } from "./MessageVoiceBar";
 import { ChatQuickSettingsButton } from "./ChatQuickSettings";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { EditedFilesList } from "./EditedFilesList";
+import { CommandResultCard } from "./CommandResultCard";
+import { AgentPlanCard } from "./AgentPlanCard";
 import { ClipShelfButton } from "./ClipShelfButton";
 import { buildReplyStyleInstruction } from "../lib/chat-preferences";
 import { setClipImageSink, useClipShelf } from "../lib/clip-shelf";
@@ -62,12 +73,17 @@ import { notify } from "../lib/ide-commands";
 import { listCheckpointIds, restoreCheckpoint } from "../lib/checkpoints";
 import {
   formatProjectRulesForAgent,
-  readProjectRules,
+  readAllProjectRules,
 } from "../lib/project-rules";
+import {
+  formatProblemsContext,
+  matchVirtualMention,
+} from "../lib/virtual-context";
 import { getWorkspaceCwd } from "../lib/secure-storage";
 import { resolveWorkspacePath } from "../lib/open-workspace-file";
 import { useExplorerStore } from "../store/explorerStore";
 import { attachReferencedChats } from "../lib/chat-reference";
+import { buildCompactChatHistory } from "../lib/chat-context-compact";
 import {
   detectBrowserOpenIntent,
   extractPreviewUrls,
@@ -76,9 +92,18 @@ import {
 import { detectProjectPreviewUrl } from "../lib/project-url";
 import {
   formatComposerChipLabels,
-  formatComposerContext,
   useComposerContextStore,
 } from "../store/composerContextStore";
+import { expandComposerContext } from "../lib/composer-context-expand";
+import {
+  applyAtMentionReplacement,
+  findAtMentionQuery,
+  flattenExplorerEntries,
+  rankAtMentionCandidates,
+  type AtMentionCandidate,
+  type AtMentionQuery,
+} from "../lib/composer-at-mention";
+import { useWorkspaceIndexStore } from "../store/workspaceIndexStore";
 import { useExplorerDragStore } from "../lib/explorer-drag-session";
 import { openAndRevealFile } from "../lib/open-workspace-file";
 import { PaneToggleButton } from "./layout/PaneToggleButton";
@@ -390,6 +415,12 @@ function ChatMessageView({
                 <MarkdownMessage content={message.content} />
                 {message.editedFiles && message.editedFiles.length > 0 ? (
                   <EditedFilesList files={message.editedFiles} />
+                ) : null}
+                {message.planItems && message.planItems.length > 0 ? (
+                  <AgentPlanCard items={message.planItems} />
+                ) : null}
+                {message.commandResults && message.commandResults.length > 0 ? (
+                  <CommandResultCard results={message.commandResults} />
                 ) : null}
               </>
             ) : (
@@ -898,6 +929,17 @@ export function ChatPanel() {
   const [composerDropActive, setComposerDropActive] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [atMention, setAtMention] = useState<{
+    mention: AtMentionQuery;
+    candidates: AtMentionCandidate[];
+    index: number;
+  } | null>(null);
+  const [toolApproval, setToolApproval] = useState<{
+    id: string;
+    toolName: string;
+    summary: string;
+  } | null>(null);
+  const agentAutoRun = useAgentSettingsStore((s) => s.agentAutoRun);
   const [checkpointIds, setCheckpointIds] = useState<Set<string>>(new Set());
   const [folds, setFolds] = useState<Record<string, TurnFold>>({});
   const fold = folds[tabKey] ?? { mode: "all-open" as const, except: [] };
@@ -1081,6 +1123,8 @@ export function ChatPanel() {
         modelLabel: msg.modelLabel,
         images: msg.images,
         editedFiles: msg.editedFiles,
+        commandResults: msg.commandResults,
+        planItems: msg.planItems,
       },
     ]);
     return id;
@@ -1090,7 +1134,15 @@ export function ChatPanel() {
     tabId: string,
     id: string,
     patch: Partial<
-      Pick<ChatMessage, "content" | "modelLabel" | "images" | "editedFiles">
+      Pick<
+        ChatMessage,
+        | "content"
+        | "modelLabel"
+        | "images"
+        | "editedFiles"
+        | "commandResults"
+        | "planItems"
+      >
     >,
   ) {
     useTabsStore.getState().updateTabMessages(
@@ -1206,6 +1258,18 @@ export function ChatPanel() {
 
   function cancelRunning() {
     abortRef.current?.abort();
+    setToolApproval(null);
+  }
+
+  async function answerToolApproval(decision: "allow" | "skip" | "allow_session") {
+    const pending = toolApproval;
+    setToolApproval(null);
+    if (!pending?.id) return;
+    try {
+      await respondToolApproval(pending.id, decision);
+    } catch {
+      notify("Could not send tool approval");
+    }
   }
 
   function editUserMessage(message: ChatMessage) {
@@ -1272,10 +1336,41 @@ export function ChatPanel() {
     let assistantId: string | null = null;
     const stream = new AgentTextStream();
     let notes = "";
-    const editedFiles = new Map<string, string>(); // abs -> label
+    const editedFiles = new Map<string, ChatEditedFile>(); // abs -> meta
+    const commandResults: ChatCommandResult[] = [];
+    let planItems: ChatPlanItem[] = [];
 
     const editedFilesList = (): ChatEditedFile[] =>
-      [...editedFiles.entries()].map(([path, label]) => ({ path, label }));
+      [...editedFiles.values()];
+
+    const normalizePlanStatus = (status: string): ChatPlanStatus => {
+      const s = status.toLowerCase();
+      if (s === "in_progress" || s === "in-progress") return "in_progress";
+      if (s === "completed" || s === "done") return "completed";
+      if (s === "failed" || s === "error") return "failed";
+      if (s === "cancelled" || s === "canceled") return "cancelled";
+      return "pending";
+    };
+
+    const rememberEdited = (
+      abs: string,
+      label: string,
+      sides?: { original?: string; modified?: string },
+    ) => {
+      const prev = editedFiles.get(abs);
+      editedFiles.set(abs, {
+        path: abs,
+        label,
+        original:
+          typeof sides?.original === "string"
+            ? sides.original
+            : prev?.original,
+        modified:
+          typeof sides?.modified === "string"
+            ? sides.modified
+            : prev?.modified,
+      });
+    };
 
     const answerBody = () =>
       [stream.text, notes].filter((part) => part.trim()).join("\n\n");
@@ -1293,18 +1388,31 @@ export function ChatPanel() {
       const body = answerBody();
       const content = usage ? `${body}\n\n_${formatUsageLine(usage)}_` : body;
       const files = editedFilesList();
-      if (!content.trim() && files.length === 0) return;
+      if (
+        !content.trim() &&
+        files.length === 0 &&
+        commandResults.length === 0 &&
+        planItems.length === 0
+      ) {
+        return;
+      }
       if (!assistantId) {
         assistantId = appendToTab(tabId, {
           role: "assistant",
           content: content || " ",
           modelLabel: modelChoice,
           editedFiles: files.length > 0 ? files : undefined,
+          commandResults:
+            commandResults.length > 0 ? [...commandResults] : undefined,
+          planItems: planItems.length > 0 ? [...planItems] : undefined,
         });
       } else {
         updateOnTab(tabId, assistantId, {
           content: content || " ",
           editedFiles: files.length > 0 ? files : undefined,
+          commandResults:
+            commandResults.length > 0 ? [...commandResults] : undefined,
+          planItems: planItems.length > 0 ? [...planItems] : undefined,
         });
       }
     };
@@ -1394,6 +1502,16 @@ export function ChatPanel() {
 
       promptForAgent = attachReferencedChats(promptForAgent, tabId, findChatByRequestId);
 
+      // Continuity for long monorepo sessions: compact older turns, keep recent verbatim.
+      const historyBlock = buildCompactChatHistory(messagesOf(tabId), {
+        recentCount: 6,
+        maxChars: 14_000,
+        skipLastUser: true,
+      });
+      if (historyBlock) {
+        promptForAgent = `${historyBlock}\n\n${promptForAgent}`;
+      }
+
       const routed = routeTask({
         prompt: promptForAgent,
         preferredProvider: modelChoice === "auto" ? "auto" : undefined,
@@ -1410,12 +1528,19 @@ export function ChatPanel() {
         const workspace = (await getWorkspaceCwd()).trim();
         if (workspace) {
           const rules = formatProjectRulesForAgent(
-            await readProjectRules(workspace),
+            await readAllProjectRules(workspace),
           );
           if (rules) styleParts.push(rules);
         }
       } catch {
         /* No workspace rules — continue with reply style only. */
+      }
+      const liveProblems = useTerminalStore.getState().problems;
+      if (liveProblems.some((p) => p.severity === "error")) {
+        styleParts.push(
+          "Current editor diagnostics (fix related type errors when editing):\n" +
+            formatProblemsContext(liveProblems),
+        );
       }
       // Always remind the model it owns Vigil Browser — overrides bad project rules.
       styleParts.push(
@@ -1430,17 +1555,106 @@ export function ChatPanel() {
         checkpointId: userMessageId,
         checkpointAt: Date.now(),
         replyStyle: styleParts.join("\n\n"),
+        autoRun: useAgentSettingsStore.getState().agentAutoRun,
+        commandAllowlist: useAgentSettingsStore.getState().commandAllowlist,
+        pathDenylist: useAgentSettingsStore.getState().pathDenylist,
+        cwd: (await getWorkspaceCwd().catch(() => undefined)) || undefined,
       })) {
         if (controller.signal.aborted) break;
         if (event.type === "chunk" && event.text) {
           takeText(event.text);
+        } else if (event.type === "tool_approval") {
+          setToolApproval({
+            id: event.id || event.toolCallId || "",
+            toolName: event.toolName || "tool",
+            summary: event.summary || event.toolName || "Approve tool?",
+          });
         } else if (event.type === "agent_event") {
           const inner = event.event;
           const encoded =
             typeof inner === "string" ? inner : inner ? JSON.stringify(inner) : "";
           if (encoded) takeText(encoded);
-        } else if (event.type === "tool" && event.toolName === "write_file") {
-          const path = event.path ?? "untitled";
+        } else if (
+          event.type === "tool" &&
+          (event.toolName === "get_ci_status" ||
+            event.toolName === "push_and_check_ci") &&
+          event.chunk
+        ) {
+          const note = event.chunk.length > 600
+            ? `${event.chunk.slice(0, 600)}…`
+            : event.chunk;
+          notes = notes ? `${notes}\n\n${note}` : note;
+          publish(null);
+        } else if (event.type === "status" && event.status) {
+          if (/^code_index=/.test(event.status) || /reindex/i.test(event.status)) {
+            void useWorkspaceIndexStore.getState().refreshSemanticStatus();
+          }
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "create_pull_request" &&
+          event.url
+        ) {
+          const href = event.url.trim();
+          if (/^https?:\/\//i.test(href)) {
+            useEditorTabsStore.getState().openBrowser(href);
+          }
+          notes = notes
+            ? `${notes}\n\nPR: ${href}`
+            : `PR: ${href}`;
+          publish(null);
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "manage_plan" &&
+          Array.isArray(event.planItems)
+        ) {
+          planItems = event.planItems
+            .filter((item) => item && typeof item.content === "string")
+            .map((item) => ({
+              id: String(item.id || crypto.randomUUID()),
+              content: String(item.content).trim(),
+              status: normalizePlanStatus(String(item.status || "pending")),
+            }))
+            .filter((item) => item.content);
+          publish(null);
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "delegate_tasks" &&
+          Array.isArray(event.delegateJobs)
+        ) {
+          // Surface parallel delegates in the same plan card.
+          planItems = event.delegateJobs
+            .filter((job) => job && typeof job.title === "string")
+            .map((job) => {
+              const statusRaw = String(job.status || "pending");
+              const status =
+                statusRaw === "running"
+                  ? "in_progress"
+                  : statusRaw === "failed"
+                    ? "failed"
+                    : statusRaw === "completed"
+                      ? "completed"
+                      : "pending";
+              const detail = job.error
+                ? ` — ${job.error}`
+                : job.result
+                  ? ` — ${String(job.result).replace(/\s+/g, " ").slice(0, 80)}`
+                  : "";
+              return {
+                id: String(job.id || crypto.randomUUID()),
+                content: `Delegate: ${String(job.title).trim()}${detail}`,
+                status: normalizePlanStatus(status),
+              };
+            })
+            .filter((item) => item.content);
+          publish(null);
+        } else if (
+          event.type === "tool" &&
+          (event.toolName === "write_file" ||
+            event.toolName === "apply_patch" ||
+            event.toolName === "editor") &&
+          event.path
+        ) {
+          const path = event.path;
           const content = event.content ?? "";
           let workspace = "";
           try {
@@ -1449,9 +1663,81 @@ export function ChatPanel() {
             /* ignore */
           }
           const { abs, label } = resolveWorkspacePath(path, workspace || null);
-          editedFiles.set(abs, label);
-          showAgentDiff(abs, "", content);
+          // apply_patch start: stash original only; show diff when we have post-edit content.
+          if (event.toolName === "apply_patch" && event.hook === "start") {
+            if (typeof event.original === "string") {
+              rememberEdited(abs, label, { original: event.original });
+              publish(null);
+            }
+            continue;
+          }
+          let original =
+            typeof event.original === "string" ? event.original : "";
+          if (!original) {
+            original = editedFiles.get(abs)?.original ?? "";
+          }
+          if (!original && event.toolName !== "write_file") {
+            try {
+              original = await readTextFile(abs);
+            } catch {
+              original = "";
+            }
+          }
+          rememberEdited(abs, label, {
+            original,
+            modified: content || undefined,
+          });
+          // Prefer sidecar-provided after-content; avoid treating disk-as-original after write.
+          if (content || event.toolName === "write_file") {
+            showAgentDiff(abs, original, content);
+          }
           publish(null);
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "run_commands"
+        ) {
+          const command = event.command?.trim();
+          let workspace = "";
+          try {
+            workspace = (await getWorkspaceCwd()).trim();
+          } catch {
+            /* ignore */
+          }
+          if (event.hook === "start" && command && workspace) {
+            void useTerminalStore
+              .getState()
+              .enqueueTerminalJob(command, workspace, "write");
+            useLayoutStore.getState().setBottomTab("terminal");
+          }
+          if (event.hook === "output" && event.chunk) {
+            useTerminalStore.getState().appendOutput(event.chunk);
+            const activeId = useTerminalStore.getState().activeId;
+            if (activeId) {
+              useTerminalStore.getState().appendHistory(activeId, event.chunk);
+            }
+            const termNote = event.chunk.length > 400
+              ? `${event.chunk.slice(0, 400)}…`
+              : event.chunk;
+            notes = notes
+              ? `${notes}\n${termNote}`
+              : `\`\`\`\n${termNote}\n\`\`\``;
+            publish(null);
+          }
+          if (event.hook === "end" && command) {
+            const exitCode =
+              typeof event.exitCode === "number" ? event.exitCode : 1;
+            commandResults.push({
+              command,
+              exitCode,
+              excerpt: event.chunk?.trim() || undefined,
+            });
+            if (workspace) {
+              void useTerminalStore
+                .getState()
+                .enqueueTerminalJob("", workspace, "prompt");
+            }
+            publish(null);
+          }
         } else if (
           event.type === "tool" &&
           (event.toolName === "browser_open" ||
@@ -1585,8 +1871,9 @@ export function ChatPanel() {
     ignoreDictationRef.current = true;
     await stopDictationIfNeeded();
 
+    setAtMention(null);
     const chips = useComposerContextStore.getState().takeChips();
-    const contextBlock = formatComposerContext(chips);
+    const contextBlock = await expandComposerContext(chips);
     const chipLabels = formatComposerChipLabels(chips);
     const draftText = draftRef.current.trim();
     const promptBase = [contextBlock, draftText].filter(Boolean).join("\n\n");
@@ -1643,7 +1930,211 @@ export function ChatPanel() {
     void drainQueue(turn);
   }
 
+  function refreshAtMention(text: string, caret: number) {
+    const mention = findAtMentionQuery(text, caret);
+    if (!mention) {
+      setAtMention(null);
+      return;
+    }
+    const raw = mention.query;
+    const symbolMode =
+      raw.startsWith("symbol:") ||
+      raw.startsWith("symbol/") ||
+      raw.startsWith("#");
+    const q = symbolMode
+      ? raw.replace(/^(symbol:|symbol\/|#)/i, "")
+      : raw;
+    const explorer = useExplorerStore.getState();
+    const indexStore = useWorkspaceIndexStore.getState();
+
+    if (!symbolMode) {
+      const labels = {
+        problems: "Current Problems panel diagnostics",
+        codebase: "Workspace index (files + symbols)",
+        open: "Open editor tabs",
+      } as const;
+      const virtualIds = raw.trim()
+        ? ([matchVirtualMention(raw)].filter(Boolean) as Array<
+            "problems" | "codebase" | "open"
+          >)
+        : (["problems", "codebase", "open"] as const);
+      if (virtualIds.length && (!raw.trim() || matchVirtualMention(raw))) {
+        const virtualCandidates = virtualIds.map((id) => ({
+          path: `__virtual__:${id}`,
+          name: id,
+          isDir: false,
+          label: labels[id],
+          score: 120,
+          virtualId: id,
+        }));
+        if (raw.trim() && matchVirtualMention(raw) && raw.length >= 3) {
+          setAtMention({
+            mention,
+            candidates: virtualCandidates,
+            index: 0,
+          });
+          return;
+        }
+        // For empty/@short queries, merge virtuals with file hits below.
+        const indexed = indexStore.queryFiles(q, 8).map(
+          (file): AtMentionCandidate => ({
+            path: file.path,
+            name: file.name,
+            isDir: false,
+            label: file.label,
+            score: 50,
+          }),
+        );
+        setAtMention({
+          mention,
+          candidates: [...virtualCandidates, ...indexed].slice(0, 12),
+          index: 0,
+        });
+        if (!raw.trim() || raw.length < 3) return;
+      }
+    }
+
+    if (symbolMode) {
+      const candidates = indexStore.querySymbols(q, 12).map(
+        (sym): AtMentionCandidate => ({
+          path: sym.path,
+          name: sym.name,
+          isDir: false,
+          label: `${sym.kind} · ${sym.label}:${sym.line}`,
+          score: 60,
+          symbolLine: sym.line,
+          symbolKind: sym.kind,
+        }),
+      );
+      setAtMention({ mention, candidates, index: 0 });
+      return;
+    }
+
+    const indexed = indexStore.queryFiles(q, 10).map(
+      (file): AtMentionCandidate => ({
+        path: file.path,
+        name: file.name,
+        isDir: false,
+        label: file.label,
+        score: 50,
+      }),
+    );
+    const symbolHits = indexStore.querySymbols(q, 6).map(
+      (sym): AtMentionCandidate => ({
+        path: sym.path,
+        name: sym.name,
+        isDir: false,
+        label: `${sym.kind} · ${sym.label}:${sym.line}`,
+        score: 55,
+        symbolLine: sym.line,
+        symbolKind: sym.kind,
+      }),
+    );
+    const explorerHits = rankAtMentionCandidates(
+      flattenExplorerEntries(explorer.children),
+      q,
+      explorer.root,
+      6,
+    );
+    const byKey = new Map<string, AtMentionCandidate>();
+    for (const hit of [...symbolHits, ...indexed, ...explorerHits]) {
+      const key = hit.symbolLine
+        ? `${hit.path}#${hit.symbolLine}:${hit.name}`
+        : hit.path;
+      const prev = byKey.get(key);
+      if (!prev || hit.score > prev.score) byKey.set(key, hit);
+    }
+    const candidates = [...byKey.values()]
+      .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
+      .slice(0, 12);
+    setAtMention({
+      mention,
+      candidates,
+      index: 0,
+    });
+  }
+
+  function acceptAtMention(candidate: AtMentionCandidate) {
+    const mention = atMention?.mention;
+    if (!mention) return;
+    const next = applyAtMentionReplacement(draftRef.current, mention);
+    draftRef.current = next;
+    setActiveDraft(next);
+    const root = useExplorerStore.getState().root;
+    if (candidate.virtualId) {
+      useComposerContextStore.getState().addVirtual(candidate.virtualId);
+    } else if (candidate.symbolLine) {
+      useComposerContextStore.getState().addSymbol({
+        path: candidate.path,
+        name: candidate.name,
+        line: candidate.symbolLine,
+        kind: candidate.symbolKind,
+        workspaceRoot: root,
+      });
+    } else {
+      useComposerContextStore.getState().addWorkspacePath({
+        path: candidate.path,
+        name: candidate.name,
+        isDir: candidate.isDir,
+        workspaceRoot: root,
+      });
+    }
+    setAtMention(null);
+    window.requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      const pos = mention.start;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }
+
   function onComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (atMention && atMention.candidates.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAtMention((cur) =>
+          cur
+            ? {
+                ...cur,
+                index: (cur.index + 1) % cur.candidates.length,
+              }
+            : cur,
+        );
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAtMention((cur) =>
+          cur
+            ? {
+                ...cur,
+                index:
+                  (cur.index - 1 + cur.candidates.length) %
+                  cur.candidates.length,
+              }
+            : cur,
+        );
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setAtMention(null);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        const pick = atMention.candidates[atMention.index];
+        if (pick) acceptAtMention(pick);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const pick = atMention.candidates[atMention.index];
+        if (pick) acceptAtMention(pick);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       void onSubmit(e);
@@ -1675,6 +2166,7 @@ export function ChatPanel() {
 
   const contextChips = useComposerContextStore((s) => s.chips);
   const removeContextChip = useComposerContextStore((s) => s.removeChip);
+  const indexBusy = useWorkspaceIndexStore((s) => s.indexing);
   const explorerDragActive = useExplorerDragStore(
     (s) => s.dragging && s.overComposer,
   );
@@ -1824,6 +2316,42 @@ export function ChatPanel() {
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
       >
+        {toolApproval && (
+          <div className="mb-2 rounded-md border border-[var(--vigil-accent)] bg-[var(--vigil-accent-soft)] p-2 text-xs">
+            <div className="font-medium text-[var(--vigil-text)]">
+              Allow tool: {toolApproval.toolName}
+            </div>
+            <div className="mt-0.5 text-[var(--vigil-muted)]">{toolApproval.summary}</div>
+            {!agentAutoRun && (
+              <p className="mt-1 text-[10px] text-[var(--vigil-muted)]">
+                Auto-run is off (Settings → Chat). Approve once, skip, or allow for this turn.
+              </p>
+            )}
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                className="rounded bg-[var(--vigil-accent)] px-2 py-1 !text-white"
+                onClick={() => void answerToolApproval("allow")}
+              >
+                Allow
+              </button>
+              <button
+                type="button"
+                className="rounded border border-[var(--vigil-border)] bg-[var(--vigil-panel)] px-2 py-1 text-[var(--vigil-text)]"
+                onClick={() => void answerToolApproval("allow_session")}
+              >
+                Allow for this turn
+              </button>
+              <button
+                type="button"
+                className="rounded border border-[var(--vigil-border)] bg-[var(--vigil-panel)] px-2 py-1 text-[var(--vigil-danger)]"
+                onClick={() => void answerToolApproval("skip")}
+              >
+                Skip
+              </button>
+            </div>
+          </div>
+        )}
         {composerHighlight && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded bg-[var(--vigil-accent-soft)]/80">
             <span className="rounded-md border border-[var(--vigil-accent)] bg-[var(--vigil-panel)] px-3 py-1.5 text-xs font-medium text-[var(--vigil-accent)]">
@@ -1843,7 +2371,11 @@ export function ChatPanel() {
         {contextChips.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {contextChips.map((chip) => {
-              const isPath = chip.kind === "file" || chip.kind === "folder";
+              const isPath =
+                chip.kind === "file" ||
+                chip.kind === "folder" ||
+                chip.kind === "symbol" ||
+                chip.kind === "selection";
               return (
                 <div
                   key={chip.id}
@@ -1859,7 +2391,13 @@ export function ChatPanel() {
                       ? "📁"
                       : chip.kind === "file"
                         ? "📄"
-                        : "⌘"}
+                        : chip.kind === "symbol"
+                          ? "λ"
+                          : chip.kind === "selection"
+                            ? "▤"
+                            : chip.kind === "virtual"
+                              ? "@"
+                              : "⌘"}
                   </span>
                   {isPath && chip.path ? (
                     <button
@@ -1868,14 +2406,23 @@ export function ChatPanel() {
                       onClick={() =>
                         void openAndRevealFile(chip.path!, {
                           isDir: chip.kind === "folder",
+                          revealLine:
+                            chip.kind === "symbol" || chip.kind === "selection"
+                              ? chip.line
+                              : undefined,
                         })
                       }
                     >
-                      @{chip.detail}
+                      {chip.kind === "symbol"
+                        ? `@${chip.title}`
+                        : chip.kind === "selection"
+                          ? `@${chip.detail} (${chip.title})`
+                          : `@${chip.detail}`}
                     </button>
                   ) : (
                     <span className="truncate font-medium">
-                      @{chip.title} ({chip.detail})
+                      @{chip.title}
+                      {chip.kind === "virtual" ? "" : ` (${chip.detail})`}
                     </span>
                   )}
                   <button
@@ -1914,26 +2461,95 @@ export function ChatPanel() {
           </div>
         )}
 
-        <textarea
-          ref={composerRef}
-          value={draft}
-          dir="auto"
-          style={{ unicodeBidi: "plaintext" }}
-          onChange={(e) => setActiveDraft(e.target.value)}
-          onPaste={onPaste}
-          onKeyDown={onComposerKeyDown}
-          onDragEnter={onComposerDragOver}
-          onDragOver={onComposerDragOver}
-          onDragLeave={onComposerDragLeave}
-          onDrop={onComposerDrop}
-          rows={3}
-          placeholder={
-            isRunning
-              ? "Queue a follow-up… it runs when the current turn finishes"
-              : "Ask anything… drag a file from Explorer, paste an image, or use the mic"
-          }
-          className="w-full resize-none rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--vigil-accent)]"
-        />
+        <div className="relative">
+          <textarea
+            ref={composerRef}
+            value={draft}
+            dir="auto"
+            style={{ unicodeBidi: "plaintext" }}
+            onChange={(e) => {
+              const value = e.target.value;
+              setActiveDraft(value);
+              draftRef.current = value;
+              refreshAtMention(value, e.target.selectionStart ?? value.length);
+            }}
+            onClick={(e) =>
+              refreshAtMention(
+                e.currentTarget.value,
+                e.currentTarget.selectionStart ?? e.currentTarget.value.length,
+              )
+            }
+            onKeyUp={(e) => {
+              if (
+                e.key === "ArrowLeft" ||
+                e.key === "ArrowRight" ||
+                e.key === "Home" ||
+                e.key === "End"
+              ) {
+                refreshAtMention(
+                  e.currentTarget.value,
+                  e.currentTarget.selectionStart ?? e.currentTarget.value.length,
+                );
+              }
+            }}
+            onPaste={onPaste}
+            onKeyDown={onComposerKeyDown}
+            onDragEnter={onComposerDragOver}
+            onDragOver={onComposerDragOver}
+            onDragLeave={onComposerDragLeave}
+            onDrop={onComposerDrop}
+            rows={3}
+            placeholder={
+              isRunning
+                ? "Queue a follow-up… it runs when the current turn finishes"
+                : "Ask anything… @file @symbol:Name @problems @codebase @open"
+            }
+            className="w-full resize-none rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--vigil-accent)]"
+          />
+          {atMention && atMention.candidates.length > 0 && (
+            <ul
+              role="listbox"
+              aria-label="File mentions"
+              className="absolute bottom-full left-0 z-20 mb-1 max-h-48 w-full overflow-auto rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-panel)] py-1 shadow-lg"
+            >
+              {atMention.candidates.map((candidate, i) => (
+                <li key={candidate.path}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={i === atMention.index}
+                    className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs ${
+                      i === atMention.index
+                        ? "bg-[var(--vigil-accent-soft)] text-[var(--vigil-text)]"
+                        : "text-[var(--vigil-text)] hover:bg-[var(--vigil-hover)]"
+                    }`}
+                    onMouseDown={(ev) => {
+                      ev.preventDefault();
+                      acceptAtMention(candidate);
+                    }}
+                  >
+                    <span className="shrink-0 text-[var(--vigil-muted)]">
+                      {candidate.isDir ? "📁" : "📄"}
+                    </span>
+                    <span className="min-w-0 truncate font-medium">
+                      {candidate.name}
+                    </span>
+                    <span className="min-w-0 truncate text-[10px] text-[var(--vigil-muted)]">
+                      {candidate.label}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {atMention && atMention.candidates.length === 0 && (
+            <div className="absolute bottom-full left-0 z-20 mb-1 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-panel)] px-2 py-1.5 text-[11px] text-[var(--vigil-muted)] shadow-lg">
+              {indexBusy
+                ? "Indexing workspace…"
+                : "No matching files in the workspace index"}
+            </div>
+          )}
+        </div>
 
         {visibleQueue.length > 0 && (
           <div className="mt-2 overflow-hidden rounded-md border border-[var(--vigil-border)]">

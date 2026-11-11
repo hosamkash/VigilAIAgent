@@ -36,6 +36,28 @@ export function agentStats(inputTokens: number, outputTokens: number): string {
   return `Agent Stats: ${used.toLocaleString("en-US")} tokens`;
 }
 
-export function isWarningProblem(message: string): boolean {
+/** Compact status-bar label for the deep local code index. */
+export function codeIndexLabel(
+  indexing: boolean,
+  chunkCount: number | null | undefined,
+  deep = false,
+): string {
+  if (indexing) return "Index…";
+  if (chunkCount != null && chunkCount > 0) {
+    return deep ? `Deep: ${chunkCount}` : `Index: ${chunkCount}`;
+  }
+  return "Index: —";
+}
+
+export function isWarningProblem(
+  messageOrSeverity: string | { severity?: string; message?: string },
+): boolean {
+  if (typeof messageOrSeverity === "object" && messageOrSeverity) {
+    const sev = String(messageOrSeverity.severity || "").toLowerCase();
+    if (sev === "error") return false;
+    if (sev === "warning" || sev === "info" || sev === "hint") return true;
+    return isWarningProblem(String(messageOrSeverity.message || ""));
+  }
+  const message = String(messageOrSeverity || "");
   return /\bwarn(ing)?\b/i.test(message) && !/\berror\b/i.test(message);
 }

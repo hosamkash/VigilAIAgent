@@ -8,12 +8,18 @@ const MAX_CHIP_CHARS = 12_000;
 
 export type ComposerContextChip = {
   id: string;
-  kind: "terminal" | "file" | "folder";
+  kind: "terminal" | "file" | "folder" | "symbol" | "virtual" | "selection";
   title: string;
   detail: string;
   text: string;
-  /** Absolute path for file/folder chips. */
+  /** Absolute path for file/folder/symbol/selection chips. */
   path?: string;
+  /** 1-based line for symbol chips (or selection start). */
+  line?: number;
+  /** 1-based end line for selection chips. */
+  endLine?: number;
+  /** Virtual mention id: problems | codebase | open */
+  virtualId?: "problems" | "codebase" | "open";
 };
 
 type TerminalSelectionInput = {
@@ -30,10 +36,29 @@ type WorkspacePathInput = {
   workspaceRoot?: string | null;
 };
 
+type SymbolInput = {
+  path: string;
+  name: string;
+  line: number;
+  kind?: string;
+  workspaceRoot?: string | null;
+};
+
+type CodeSelectionInput = {
+  path: string;
+  text: string;
+  startLine: number;
+  endLine: number;
+  workspaceRoot?: string | null;
+};
+
 interface ComposerContextState {
   chips: ComposerContextChip[];
   addTerminalSelection: (input: TerminalSelectionInput) => string | null;
   addWorkspacePath: (input: WorkspacePathInput) => string | null;
+  addSymbol: (input: SymbolInput) => string | null;
+  addCodeSelection: (input: CodeSelectionInput) => string | null;
+  addVirtual: (virtualId: "problems" | "codebase" | "open") => string | null;
   addExplorerItems: (
     items: VigilExplorerDragItem[],
     workspaceRoot?: string | null,
@@ -74,6 +99,31 @@ export function formatComposerContext(chips: ComposerContextChip[]): string {
           `[/Folder reference]`
         );
       }
+      if (chip.kind === "symbol") {
+        return (
+          `[Symbol reference: ${chip.title}]\n` +
+          `kind: ${chip.detail}\n` +
+          `path: ${chip.path ?? ""}\n` +
+          `line: ${chip.line ?? 1}\n` +
+          `[/Symbol reference]`
+        );
+      }
+      if (chip.kind === "selection") {
+        const start = chip.line ?? 1;
+        const end = chip.endLine ?? start;
+        const range = start === end ? `L${start}` : `L${start}–${end}`;
+        return (
+          `[Code selection: ${chip.detail} ${range}]\n` +
+          `path: ${chip.path ?? ""}\n` +
+          "```\n" +
+          `${chip.text}\n` +
+          "```\n" +
+          `[/Code selection]`
+        );
+      }
+      if (chip.kind === "virtual") {
+        return `[Virtual reference: @${chip.title}]`;
+      }
       return "";
     })
     .filter(Boolean)
@@ -85,6 +135,12 @@ export function formatComposerChipLabels(chips: ComposerContextChip[]): string {
     .map((chip) => {
       if (chip.kind === "file" || chip.kind === "folder") {
         return `@${chip.detail}`;
+      }
+      if (chip.kind === "symbol" || chip.kind === "virtual") {
+        return `@${chip.title}`;
+      }
+      if (chip.kind === "selection") {
+        return `@${chip.detail} (${chip.title})`;
       }
       return `@${chip.title} (${chip.detail})`;
     })
@@ -135,6 +191,106 @@ export const useComposerContextStore = create<ComposerContextState>((set, get) =
       chips: [
         ...state.chips,
         { id, kind, title, detail, text: abs, path: abs },
+      ],
+    }));
+    return id;
+  },
+  addSymbol: (input) => {
+    const abs = input.path.trim();
+    const name = input.name.trim();
+    if (!abs || !name) return null;
+    const detail = relativeWorkspaceLabel(abs, input.workspaceRoot);
+    const existing = get().chips.find(
+      (chip) =>
+        chip.kind === "symbol" &&
+        chip.path === abs &&
+        chip.title === name &&
+        chip.line === input.line,
+    );
+    if (existing) return existing.id;
+    const id = crypto.randomUUID();
+    set((state) => ({
+      chips: [
+        ...state.chips,
+        {
+          id,
+          kind: "symbol",
+          title: name,
+          detail: `${input.kind || "symbol"} · ${detail}:${input.line}`,
+          text: abs,
+          path: abs,
+          line: input.line,
+        },
+      ],
+    }));
+    return id;
+  },
+  addCodeSelection: (input) => {
+    const abs = input.path.trim();
+    const text = clipText(input.text);
+    if (!abs || !text.trim()) return null;
+    const start = Math.max(1, Math.min(input.startLine, input.endLine));
+    const end = Math.max(input.startLine, input.endLine);
+    const range = start === end ? `L${start}` : `L${start}–${end}`;
+    const detail = relativeWorkspaceLabel(abs, input.workspaceRoot);
+    const existing = get().chips.find(
+      (chip) =>
+        chip.kind === "selection" &&
+        chip.path === abs &&
+        chip.line === start &&
+        chip.endLine === end &&
+        chip.text === text,
+    );
+    if (existing) return existing.id;
+    const id = crypto.randomUUID();
+    set((state) => ({
+      chips: [
+        ...state.chips,
+        {
+          id,
+          kind: "selection",
+          title: range,
+          detail,
+          text,
+          path: abs,
+          line: start,
+          endLine: end,
+        },
+      ],
+    }));
+    return id;
+  },
+  addVirtual: (virtualId) => {
+    const meta = {
+      problems: {
+        title: "problems",
+        detail: "Current editor diagnostics",
+      },
+      codebase: {
+        title: "codebase",
+        detail: "Workspace file/symbol index",
+      },
+      open: {
+        title: "open",
+        detail: "Open editor tabs",
+      },
+    }[virtualId];
+    const existing = get().chips.find(
+      (chip) => chip.kind === "virtual" && chip.virtualId === virtualId,
+    );
+    if (existing) return existing.id;
+    const id = crypto.randomUUID();
+    set((state) => ({
+      chips: [
+        ...state.chips,
+        {
+          id,
+          kind: "virtual",
+          title: meta.title,
+          detail: meta.detail,
+          text: virtualId,
+          virtualId,
+        },
       ],
     }));
     return id;

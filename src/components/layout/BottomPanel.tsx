@@ -22,6 +22,7 @@ import {
 } from "../../lib/terminal-links";
 import { resolveTerminalShortcut } from "../../lib/terminal-shortcuts";
 import { notify } from "../../lib/ide-commands";
+import { openAndRevealFile } from "../../lib/open-workspace-file";
 import { PaneToggleButton } from "./PaneToggleButton";
 import { TerminalContextMenu } from "./TerminalContextMenu";
 
@@ -685,11 +686,43 @@ export function BottomPanel({ fill = false }: { fill?: boolean }) {
                 Clear
               </button>
             </div>
-            {problems.map((p, i) => (
-              <div key={`${p}-${i}`} className="text-[var(--vigil-danger)]">
-                {p}
+            {problems.length === 0 ? (
+              <div className="text-[var(--vigil-muted)]">
+                No problems in open TS/JS files
               </div>
-            ))}
+            ) : (
+              problems.map((p) => {
+                const isWarn =
+                  p.severity === "warning" ||
+                  p.severity === "info" ||
+                  p.severity === "hint";
+                const label = p.path
+                  ? `${p.path.split("/").slice(-2).join("/")}:${p.line}:${p.column}`
+                  : "";
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    title={p.path ? `Go to ${p.path}:${p.line}` : p.message}
+                    className={`mb-1 block w-full truncate rounded px-1 py-0.5 text-left hover:bg-[var(--vigil-hover)] ${
+                      isWarn ? "text-amber-500" : "text-[var(--vigil-danger)]"
+                    }`}
+                    onClick={() => {
+                      if (!p.path) return;
+                      void openAndRevealFile(p.path, { revealLine: p.line });
+                    }}
+                  >
+                    <span className="font-medium uppercase tracking-wide">
+                      {p.severity}
+                    </span>
+                    {label ? (
+                      <span className="text-[var(--vigil-muted)]"> · {label}</span>
+                    ) : null}
+                    <span> — {p.message}</span>
+                  </button>
+                );
+              })
+            )}
           </div>
         )}
         {bottomTab === "output" && (

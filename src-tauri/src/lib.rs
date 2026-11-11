@@ -979,6 +979,95 @@ fn list_dir(path: String) -> Result<Vec<DirEntryInfo>, VigilError> {
     Ok(out)
 }
 
+fn should_skip_index_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "node_modules"
+            | ".git"
+            | "dist"
+            | "build"
+            | "target"
+            | "coverage"
+            | ".next"
+            | ".nuxt"
+            | ".turbo"
+            | ".cache"
+            | "out"
+            | "vendor"
+            | ".venv"
+            | "venv"
+            | "__pycache__"
+            | ".vigil-agent"
+    )
+}
+
+fn walk_workspace_files_inner(
+    dir: &Path,
+    root: &Path,
+    out: &mut Vec<String>,
+    max_files: usize,
+) -> Result<(), VigilError> {
+    if out.len() >= max_files {
+        return Ok(());
+    }
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| VigilError::Message(format!("list_workspace_files {}: {e}", dir.display())))?;
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == ".DS_Store" {
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.is_dir() {
+            if should_skip_index_dir(&name) {
+                continue;
+            }
+            if name.starts_with('.') && name != ".vigil" && name != ".github" {
+                continue;
+            }
+            dirs.push(entry.path());
+        } else if meta.is_file() {
+            files.push(entry.path());
+        }
+    }
+    files.sort();
+    for path in files {
+        if out.len() >= max_files {
+            break;
+        }
+        out.push(path.to_string_lossy().into_owned());
+    }
+    dirs.sort();
+    for path in dirs {
+        if out.len() >= max_files {
+            break;
+        }
+        walk_workspace_files_inner(&path, root, out, max_files)?;
+    }
+    let _ = root;
+    Ok(())
+}
+
+/// Flat list of workspace file paths for local codebase index / @ mentions.
+#[tauri::command]
+fn list_workspace_files(root: String, max_files: Option<usize>) -> Result<Vec<String>, VigilError> {
+    let root_path = PathBuf::from(&root);
+    if !root_path.is_dir() {
+        return Err(VigilError::Message(format!(
+            "list_workspace_files: not a directory: {root}"
+        )));
+    }
+    let limit = max_files.unwrap_or(20_000).clamp(100, 50_000);
+    let mut out = Vec::new();
+    walk_workspace_files_inner(&root_path, &root_path, &mut out, limit)?;
+    Ok(out)
+}
+
 #[tauri::command]
 fn read_text_file(path: String) -> Result<String, VigilError> {
     std::fs::read_to_string(&path)
@@ -1221,6 +1310,7 @@ pub fn run() {
             github_oauth::github_browser_login,
             sidecar_shared_secret_preview,
             list_dir,
+            list_workspace_files,
             read_text_file,
             write_text_file,
             create_dir,

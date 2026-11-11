@@ -175,6 +175,7 @@ export function buildAppMenus(snap: MenuSnapshot): TopMenu[] {
         sep(),
         item("edit.find", "Find", { mod: true, key: "f", label: "F" }),
         item("edit.replace", "Replace", { mod: true, alt: true, key: "f", label: "F" }),
+        item("edit.inline", "Inline Edit", { mod: true, key: "k", label: "K" }),
         sep(),
         item("view.search", "Find in Files", { mod: true, shift: true, key: "f", label: "F" }),
         item("view.replaceInFiles", "Replace in Files", {

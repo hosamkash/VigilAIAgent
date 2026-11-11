@@ -6,6 +6,7 @@ import { projectName } from "../../lib/recent-projects";
 import { runCommand } from "../../lib/ide-commands";
 import {
   agentStats,
+  codeIndexLabel,
   isWarningProblem,
   languageLabel,
   tabStats,
@@ -18,6 +19,9 @@ import { useEditorTabsStore } from "../../store/editorTabsStore";
 import { useExplorerStore } from "../../store/explorerStore";
 import { useLayoutStore } from "../../store/layoutStore";
 import { useTerminalStore } from "../../store/terminalStore";
+import { useWorkspaceIndexStore } from "../../store/workspaceIndexStore";
+import { reindexLocalCodeIndex } from "../../lib/cline-engine";
+import { notify } from "../../lib/ide-commands";
 
 const PROVIDER_LABEL: Record<string, string> = {
   auto: "Auto",
@@ -64,6 +68,9 @@ export function StatusBar() {
   const session = useCostStore((s) => s.sessionTotal);
   const provider = useChatStore((s) => s.preferredProvider);
   const running = useChatStore((s) => s.isRunning);
+  const semanticIndexing = useWorkspaceIndexStore((s) => s.semanticIndexing);
+  const semantic = useWorkspaceIndexStore((s) => s.semantic);
+  const indexError = useWorkspaceIndexStore((s) => s.error);
   const [git, setGit] = useState<{ status: GitStatus; head: string | null } | null>(
     null,
   );
@@ -190,6 +197,52 @@ export function StatusBar() {
           label={running ? "Agent: running" : agentStats(session.inputTokens, session.outputTokens)}
           title="Tokens used by the agent this session"
         />
+        {root && (
+          <StatusButton
+            label={codeIndexLabel(
+              semanticIndexing,
+              semantic?.chunkCount ?? null,
+              !!semantic?.deep || (semantic?.vectorCount ?? 0) > 0,
+            )}
+            title={
+              semanticIndexing
+                ? "Building deep local code index…"
+                : indexError
+                  ? `Index error: ${indexError}`
+                  : `Deep local index (BM25+vectors+imports) · click to rebuild${
+                      semantic?.fileCount != null
+                        ? ` · ${semantic.fileCount} files`
+                        : ""
+                    }${
+                      semantic?.edgeCount
+                        ? ` · ${semantic.edgeCount} edges`
+                        : ""
+                    }`
+            }
+            onClick={() => {
+              void (async () => {
+                useWorkspaceIndexStore.setState({ semanticIndexing: true });
+                try {
+                  const next = await reindexLocalCodeIndex();
+                  useWorkspaceIndexStore.setState({
+                    semantic: next,
+                    semanticIndexing: false,
+                  });
+                  notify(
+                    `Deep index · ${next.fileCount ?? 0} files · ${next.chunkCount ?? 0} chunks · ${next.vectorCount ?? 0} vectors`,
+                  );
+                } catch (err) {
+                  useWorkspaceIndexStore.setState({ semanticIndexing: false });
+                  notify(
+                    `Index rebuild failed: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  );
+                }
+              })();
+            }}
+          />
+        )}
         {git?.head && <StatusButton label={git.head} title="Current commit" />}
         <StatusButton
           label={PROVIDER_LABEL[provider] ?? chatModelLabel(provider)}

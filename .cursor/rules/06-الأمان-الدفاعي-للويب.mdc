@@ -1,0 +1,330 @@
+---
+description: "06 الأمان الدفاعي للويب (Vigil Secure)"
+alwaysApply: true
+---
+
+<!-- ===== فهرس عربي / اقرأني أول ===== -->
+**أولوية التنفيذ: 06** — الأمان الدفاعي للويب (Vigil Secure)
+
+> **بالعربي (الغرض):** فحص مواقعك فقط، إصلاح، وتقرير للبيع كإضافة.
+
+> **ملاحظة:** التفاصيل بالإنجليزي زي ما هي. سطر «عربي» فوق كل عنوان = ترجمة سريعة وأنت بتلف.
+
+**فهرس سريع:**
+- رأي المنتج باختصار
+- قسم — 1. Problem we solve
+- قواعد إلزامية
+- قسم — 3. Personas
+- رحلة المستخدم المثالية
+- خريطة القدرات
+- الواجهة في الديسكتوب
+- أدوات الوكيل
+- موديل بيانات Firestore
+- توصية التغليف والبيع
+- مراحل التسليم
+- معايير القبول — امتى نخلص؟
+- قرارات لسه مفتوحة
+- صندوق الأفكار
+- حاجات مش في النطاق / خطوط حمراء
+- ملخص الرأي
+
+**ترتيب الملفات:** `00` عامة → `01` Plan Mode → `02` جسر سحابة → `03` ويب → `04` دعم/SQL → `05` EXE → `06` أمان
+<!-- ===== نهاية الفهرس العربي ===== -->
+
+# Vigil Secure (Web) — Defensive Security Assistant Spec
+
+**Status:** SPEC / PLANNING ONLY — no implementation until the user starts execution.  
+**Goal:** Help developers (and later customers) **harden their own web apps** — discover weaknesses, prove risk on an **authorized** target, then **fix in the Vigil workspace**. Not a substitute for a full InfoSec team or formal pentest firm — an **always-on smart assistant** during build + a sellable **security check** product.  
+**Hard rule:** **Authorized targets only** (localhost, user’s workspace preview, domains the customer proves they own / have written permission to test). Never a general “hack any site” product.
+
+**Related:** Vigil Browser (`browser_*`, `BrowserView`), Plan Mode, Support tickets, `03-عقد-مشروع-الويب.mdc` packages/entitlements, `00-الخطة-العامة-والأولويات.mdc`.
+
+---
+
+> **عربي:** رأي المنتج باختصار
+
+## 0. Product opinion (short — locked for planning)
+
+| Question | Answer |
+|----------|--------|
+| Is this useful? | **Yes — high value**, especially for teams **without** a security engineer (common in SME / Egypt market). |
+| Replace a pentester? | **No.** Assistant + guided checks + fix loop. Formal audits still matter for banks/compliance. |
+| Bundle vs separate? | **Both:** ship as **entitled feature / add-on SKU inside Vigil** for builders; optionally market **Vigil Secure Report** (scan → PDF/ADO tickets → fix plan) as upsell. Same engine. |
+| Malicious use risk? | Real — mitigate with **authz gates**, allowlist hosts, no “scan arbitrary URL” without ownership proof, logging, ToS. |
+
+**Verdict:** Worth building as a **first-class differentiator**, not a gimmick — if framed as **defend / fix**, gated, and tied to the coding agent that can patch the repo.
+
+---
+
+> **عربي:** قسم — 1. Problem we solve
+
+## 1. Problem we solve
+
+Developers ship web apps and don’t know OWASP. They can’t hire InfoSec for every sprint.  
+They need: open app in **Vigil Browser** → run **safe authorized checks** → see “what broke / what’s risky” → get **fix** applied in the project → retest.
+
+Commercial: companies buy “اختبروا الموقع ده هل يتاخد؟ وقولولنا نصلّح إزاي” as a **service/product**, not as hacking-as-a-service against third parties.
+
+---
+
+> **عربي:** قواعد إلزامية
+
+## 2. Guardrails (non-negotiable)
+
+- [ ] Target must be one of: `localhost` / `127.0.0.1` / project preview URL / user-configured **allowlisted** hosts  
+- [ ] For non-local hosts: require **ownership confirmation** (DNS TXT, file upload, admin checkbox + typed CONFIRM, or org-verified domain in Firestore)  
+- [ ] Block tools if URL is not allowlisted — hard fail in sidecar policy (not only prompt)  
+- [ ] No credential stuffing against third-party sites; no malware distribution; no ransomware  
+- [ ] Prefer **known scanners’ safe modes** + **passive** checks first; active checks = explicit user Start  
+- [ ] Rate limits; no DoS stress modes in v1 (or separate “load” product later with warnings)  
+- [ ] Findings stored as **security reports** in account (Firestore) — **not** full exploit kits shared publicly  
+- [ ] Agent default: **remediate** (patch, headers, validation) — not “how to weaponize”  
+- [ ] Legal/ToS: “only systems you own or are authorized to test”  
+
+---
+
+> **عربي:** قسم — 3. Personas
+
+## 3. Personas
+
+| Persona | Need |
+|---------|------|
+| **Web developer in Vigil** | While building: catch XSS/SQLi/auth mistakes early; fix in repo |
+| **Team lead / SME owner** | Buy Secure checks + readable Arabic/English report |
+| **Support / Secure specialist** (later) | Run packs, file ADO tickets from findings |
+| **InfoSec engineer** | Optional power mode; Vigil is assistant, they remain authority |
+
+---
+
+> **عربي:** رحلة المستخدم المثالية
+
+## 4. North-star loop (defend, don’t “just hack”)
+
+```text
+1. Open target in Vigil Browser (project preview / allowlisted URL)
+2. User: "اختبر أمان الصفحة دي" / Start Secure scan
+3. Vigil runs pack (passive → active with confirm)
+4. Findings list: severity, OWASP category, evidence (screenshot/response snippet), affected route
+5. User: "صلّح" → Plan or direct agent patches workspace
+6. Retest same checks → green / residual risk
+7. Optional: export report PDF / publish ADO Bugs
+```
+
+---
+
+> **عربي:** خريطة القدرات
+
+## 5. Capability map (dreams + phases)
+
+> **عربي:** تعليم للمبتدئ أمنيًا
+
+### 5.1 Education layer (for security-illiterate users) — CRITICAL
+
+- [ ] Plain Arabic explanations: what XSS/SQLi/CSRF/IDOR/… means in one short paragraph  
+- [ ] “Why it matters” + “how attackers abuse” at **high level** (no step-by-step crime manual)  
+- [ ] Fix guidance tied to **their stack** (detect Express/Next/Laravel/Django/ASP.NET from repo)  
+
+> **عربي:** فحص سلبي/إعدادات
+
+### 5.2 Passive / config review (safe, repo-based)
+
+- [ ] Dependency CVE scan (`npm audit`, `pip-audit`, OSV) — already adjacent to agent tools  
+- [ ] Secret leak scan in workspace (API keys in client bundles)  
+- [ ] Security headers checklist on responses (CSP, HSTS, X-Frame-Options, …) via Browser  
+- [ ] Cookie flags (Secure, HttpOnly, SameSite)  
+- [ ] HTTPS / mixed content  
+- [ ] CORS misconfiguration heuristics on **own** API  
+- [ ] Auth cookie/session basics in preview  
+
+> **عربي:** فحص نشط مصرّح
+
+### 5.3 Active checks on authorized target (Vigil Browser + optional scanners)
+
+High-level categories (OWASP-aligned) — implement via **safe probes** / integrated tools, not ad-hoc malware:
+
+- [ ] **Injection** (SQL/NoSQL/command) — parameterized probes on forms/APIs user maps; stop on confirm  
+- [ ] **XSS** reflected/stored — input reflection checks  
+- [ ] **Authn/Authz** — unauthenticated access to `/admin`, IDOR-style same-role object access **on fixtures**  
+- [ ] **CSRF** — missing token heuristics on state-changing forms  
+- [ ] **Path / file** — obvious traversal on upload/download endpoints if present  
+- [ ] **Security misconfig** — directory listing, default pages, verbose errors  
+- [ ] **Sensitive data** — stack traces, `.env` exposed, source maps in prod preview  
+
+**Integrations (prefer battle-tested engines over inventing exploits):**
+- [ ] Optional **OWASP ZAP** baseline/api (local process)  
+- [ ] Optional **Nuclei** with **safe/informative** templates only (curated allowlist of templates)  
+- [ ] Playwright/`browser_*` for click-path + screenshot evidence  
+
+> **عربي:** إصلاح وإعادة اختبار
+
+### 5.4 Fix & verify
+
+- [ ] Finding → suggested patch (code + config + headers middleware)  
+- [ ] Plan Mode: security remediation plan  
+- [ ] Retest button per finding  
+- [ ] “Secure baseline” badge when pack passes on preview  
+
+> **عربي:** تقرير للبيع
+
+### 5.5 Commercial Secure Report (sellable)
+
+- [ ] Package entitlement `feature.vigilSecure` / SKU **Vigil Secure**  
+- [ ] Run pack → **Report** (AR/EN): executive summary + technical findings + fix checklist  
+- [ ] Export PDF / Markdown; push Bugs to **Azure DevOps**  
+- [ ] Customer portal on Vigil Web: past reports, schedule monthly retest (`Schedule`)  
+- [ ] Clear disclaimer: not a certified pentest unless partner process added later  
+
+---
+
+> **عربي:** الواجهة في الديسكتوب
+
+## 6. UX in Vigil Desktop
+
+- [ ] Sidebar / mode: **Secure** (or under Tools)  
+- [ ] Target picker: project preview URL (auto) + allowlist manager  
+- [ ] Scan packs: Quick (passive) / Standard / Deep (active, confirm)  
+- [ ] Findings panel: severity sort, filter OWASP  
+- [ ] “Fix in project” / “Explain simply” / “Retest”  
+- [ ] Evidence screenshots from Vigil Browser  
+- [ ] Empty state for beginners: «اختبر معاينة المشروع» one button  
+
+---
+
+> **عربي:** أدوات الوكيل
+
+## 7. Agent tools (conceptual)
+
+| Tool | Role |
+|------|------|
+| `secure_allowlist_*` | Manage authorized hosts |
+| `secure_scan_passive` | Headers, cookies, deps, secrets heuristics |
+| `secure_scan_active` | Gated active pack on allowlisted URL |
+| `secure_finding_fix` | Patch suggestion + apply via normal write tools |
+| `secure_retest` | Re-run checks for finding ids |
+| `secure_report_export` | Markdown/PDF metadata |
+
+Browser tools remain `browser_*`; Secure orchestrates them + scanners.
+
+**Policy:** Active scan tools require allowlist + explicit user confirmation; blocked in nested workers unless opted in.
+
+---
+
+> **عربي:** موديل بيانات Firestore
+
+## 8. Data model (Firestore — account)
+
+| Collection | Purpose |
+|------------|---------|
+| `secureAllowlists` | Verified hosts per user/org |
+| `secureScans` | Scan runs, pack, target, status |
+| `secureFindings` | Severity, category, evidence refs, status open/fixed |
+| `secureReports` | Customer-facing report snapshots |
+
+Never store third-party attack tooling configs that enable unauthenticated mass scanning as a public API without authz.
+
+---
+
+> **عربي:** توصية التغليف والبيع
+
+## 9. Packaging recommendation
+
+| Offering | What |
+|----------|------|
+| **Included (Pro)** | Passive checks + education + fix-on-localhost |
+| **Add-on: Vigil Secure** | Active packs, reports, scheduled retest, ADO export |
+| **Service (optional later)** | Human-reviewed report partner — out of Phase 1 |
+
+Same codebase; entitlement flags. Fits `03-عقد-مشروع-الويب.mdc` Pricing packages.
+
+---
+
+> **عربي:** مراحل التسليم
+
+## 10. Phased delivery
+
+> **عربي:** قسم — Phase A — Assist the builder (highest ROI)
+
+### Phase A — Assist the builder (highest ROI)
+1. Allowlist + localhost/preview default  
+2. Passive scan (headers, cookies, deps audit, secret heuristics)  
+3. Beginner explanations AR/EN  
+4. Findings → fix with agent + retest headers/deps  
+5. Entitlement stub  
+
+> **عربي:** قسم — Phase B — Authorized active + Browser evidence
+
+### Phase B — Authorized active + Browser evidence
+1. Form/API probe packs (curated)  
+2. ZAP baseline optional integration  
+3. Screenshots + finding evidence  
+4. Plan Mode security remediation  
+
+> **عربي:** قسم — Phase C — Sellable Secure Report
+
+### Phase C — Sellable Secure Report
+1. PDF/Markdown report  
+2. Vigil Web history + Schedule retest  
+3. ADO ticket publish from findings  
+4. Domain ownership verification flow  
+
+> **عربي:** قسم — Phase D — Hardening product
+
+### Phase D — Hardening product
+1. Nuclei curated templates  
+2. Org policies / CI gate “Secure pack must pass”  
+3. Partner certified pentest handoff  
+
+---
+
+> **عربي:** معايير القبول — امتى نخلص؟
+
+## 11. Acceptance criteria
+
+- [ ] Developer can run Secure Quick on project preview without knowing OWASP names  
+- [ ] Active scan **refuses** random public URLs without allowlist/ownership  
+- [ ] At least one finding can be fixed in-repo and retested to clear  
+- [ ] Arabic simple explanation available per finding category  
+- [ ] Report export for entitled accounts  
+- [ ] Product copy never markets “hack any website”  
+
+---
+
+> **عربي:** قرارات لسه مفتوحة
+
+## 12. Open decisions
+
+- [ ] Default scanner: in-house probes vs ZAP-first  
+- [ ] Whether Deep scan needs separate legal accept modal every run  
+- [ ] CI integration shape (sidecar CLI vs GitHub Action later)  
+- [ ] Branding: “Vigil Secure” vs “Vigil Shield”  
+
+---
+
+> **عربي:** صندوق الأفكار
+
+## 13. Ideas inbox
+
+- 2026-11-11: Initial Secure vision — defensive assistant for own web apps via Vigil Browser; sellable report; beginner education; authorized-only; opinion = important add-on/SKU, not a toy.  
+- 
+
+---
+
+> **عربي:** حاجات مش في النطاق / خطوط حمراء
+
+## 14. Non-goals
+
+- Offensive hacking of unauthorized third-party sites  
+- Replacing ISO/PCI formal audits in v1  
+- DDoS / stress-as-a-service  
+- Teaching weaponized exploit chains as a feature  
+- Shipping unrestricted public scan API  
+
+---
+
+> **عربي:** ملخص الرأي
+
+## 15. Opinion recap (for stakeholders)
+
+**نعم، ميزة مهمة** لو اتعملت صح: مساعد أمان للمبرمج الجاهل أمنيًا + عرض تجاري للشركات.  
+**لا** تكون البديل الوحيد عن مهندس أمن في بيئات حساسة.  
+**الأفضل:** جوه Vigil كـ **add-on / SKU** بنفس المحرك، مش بالضرورة ريبو منفصل في البداية — فصل المنتج التسويقي عن المحرك التقني.

@@ -53,6 +53,13 @@ describe("app menu", () => {
       ),
     ).toBe("file.saveAll");
   });
+
+  it("binds Inline Edit to Mod+K", () => {
+    const menus = buildAppMenus(snap);
+    expect(
+      matchingCommand(menus, { key: "k", meta: true, ctrl: false, shift: false, alt: false }, true),
+    ).toBe("edit.inline");
+  });
 });
 
 describe("accelerators", () => {

@@ -56,6 +56,12 @@ export interface VigilEngineOptions {
   checkpointAt?: number;
   /** Extra reply-style instructions from chat preferences. */
   replyStyle?: string;
+  /** When true, tools auto-run (yolo). Default false — UI must approve writes/commands. */
+  autoRun?: boolean;
+  /** Commands that auto-approve even when autoRun is false. */
+  commandAllowlist?: string[];
+  /** Paths that always require confirmation for writes. */
+  pathDenylist?: string[];
 }
 
 export type VigilStreamEvent =
@@ -69,11 +75,39 @@ export type VigilStreamEvent =
       toolName?: string;
       path?: string;
       content?: string;
+      /** Pre-edit file body (apply_patch / reliable diffs). */
+      original?: string;
+      command?: string;
+      chunk?: string;
+      stream?: string;
+      exitCode?: number;
       url?: string;
       title?: string;
       imageBase64?: string;
       hook?: string;
       event?: unknown;
+      planItems?: Array<{
+        id: string;
+        content: string;
+        status: string;
+      }>;
+      delegateJobs?: Array<{
+        id: string;
+        title: string;
+        status: string;
+        result?: string;
+        error?: string;
+        workdir?: string;
+      }>;
+    }
+  | {
+      type: "tool_approval";
+      id: string;
+      toolCallId?: string;
+      toolName?: string;
+      summary?: string;
+      input?: unknown;
+      sessionId?: string;
     }
   | {
       type: "done";
@@ -218,6 +252,9 @@ export async function* runVigilTask(
     checkpointId: options.checkpointId,
     checkpointAt: options.checkpointAt,
     replyStyle: options.replyStyle,
+    autoRun: options.autoRun === true,
+    commandAllowlist: options.commandAllowlist ?? [],
+    pathDenylist: options.pathDenylist ?? [],
   };
   const body = JSON.stringify(bodyObj);
   const hmac = await signSidecarBody(secret, session.sessionId, body);
@@ -312,13 +349,15 @@ export async function listWorkspaceFiles(dirPath = "."): Promise<string> {
   await spawnSidecar();
   const secret = await getLaunchSecret();
   const session = await getLaunchSession();
-  const body = JSON.stringify({ op: "list_files", path: dirPath });
+  const cwd = await getWorkspaceCwd().catch(() => undefined);
+  const body = JSON.stringify({ op: "list_files", path: dirPath, cwd });
   const hmac = await signSidecarBody(secret, session.sessionId, body);
   const res = await sidecarFetch(SIDECAR_BASE, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-vigil-hmac": hmac,
+      "x-vigil-session": session.sessionId,
     },
     body,
   });
@@ -330,6 +369,36 @@ export async function listWorkspaceFiles(dirPath = "."): Promise<string> {
     throw new Error(result.error ?? "list_files failed");
   }
   return result.output;
+}
+
+/** Answer a pending tool approval prompt from the chat UI. */
+export async function respondToolApproval(
+  id: string,
+  decision: "allow" | "skip" | "allow_session",
+): Promise<boolean> {
+  await spawnSidecar();
+  const secret = await getLaunchSecret();
+  const session = await getLaunchSession();
+  const body = JSON.stringify({
+    op: "tool_approval",
+    id,
+    toolCallId: id,
+    decision,
+    approved: decision === "allow" || decision === "allow_session",
+  });
+  const hmac = await signSidecarBody(secret, session.sessionId, body);
+  const res = await sidecarFetch(SIDECAR_BASE, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-vigil-hmac": hmac,
+      "x-vigil-session": session.sessionId,
+    },
+    body,
+  });
+  if (!res.ok) return false;
+  const result = (await res.json()) as { ok?: boolean };
+  return result.ok === true;
 }
 
 export function getSdkDefaultToolNames(): readonly string[] {
@@ -361,4 +430,90 @@ export async function pingSidecar(): Promise<{
 
 export async function ensureSidecar(): Promise<void> {
   await invoke("spawn_sidecar");
+}
+
+export type CodeIndexSummary = {
+  ok: boolean;
+  fileCount?: number;
+  chunkCount?: number;
+  vectorCount?: number;
+  edgeCount?: number;
+  version?: number | null;
+  deep?: boolean;
+  builtAt?: number | null;
+  ready?: boolean;
+  sizeBytes?: number;
+  ageMs?: number | null;
+  error?: string;
+};
+
+async function postSidecarOp(
+  op: string,
+  extra: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  await spawnSidecar();
+  const secret = await getLaunchSecret();
+  const session = await getLaunchSession();
+  const cwd = await getWorkspaceCwd().catch(() => undefined);
+  const body = JSON.stringify({ op, cwd, ...extra });
+  const hmac = await signSidecarBody(secret, session.sessionId, body);
+  const res = await sidecarFetch(SIDECAR_BASE, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-vigil-hmac": hmac,
+      "x-vigil-session": session.sessionId,
+    },
+    body,
+  });
+  if (!res.ok) {
+    throw new Error(`${op} failed: ${res.status}`);
+  }
+  return (await res.json()) as Record<string, unknown>;
+}
+
+/** Ensure / warm the local BM25 code index in the sidecar. */
+function toCodeIndexSummary(result: Record<string, unknown>): CodeIndexSummary {
+  return {
+    ok: result.ok !== false,
+    ready: result.ready === true || Number(result.chunkCount || 0) > 0,
+    deep: result.deep === true,
+    fileCount: Number(result.fileCount || 0),
+    chunkCount: Number(result.chunkCount || 0),
+    vectorCount: Number(result.vectorCount || 0),
+    edgeCount: Number(result.edgeCount || 0),
+    version: typeof result.version === "number" ? result.version : null,
+    builtAt: typeof result.builtAt === "number" ? result.builtAt : null,
+    sizeBytes: Number(result.sizeBytes || 0),
+    ageMs: typeof result.ageMs === "number" ? result.ageMs : null,
+  };
+}
+
+export async function ensureLocalCodeIndex(
+  force = false,
+): Promise<CodeIndexSummary> {
+  const result = await postSidecarOp("ensure_code_index", { force });
+  return toCodeIndexSummary(result);
+}
+
+export async function reindexLocalCodeIndex(): Promise<CodeIndexSummary> {
+  const result = await postSidecarOp("reindex_codebase");
+  return toCodeIndexSummary(result);
+}
+
+export async function getLocalCodeIndexStatus(): Promise<CodeIndexSummary> {
+  const result = await postSidecarOp("code_index_status");
+  return toCodeIndexSummary(result);
+}
+
+/** Incremental update after an editor save. */
+export async function updateLocalCodeIndexFile(
+  relativePath: string,
+  content: string | null,
+): Promise<void> {
+  await postSidecarOp("update_code_index_file", {
+    path: relativePath,
+    content,
+    delete: content === null,
+  });
 }

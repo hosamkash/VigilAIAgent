@@ -67,6 +67,28 @@ export type ChatImageAttachment = {
 export type ChatEditedFile = {
   path: string;
   label: string;
+  /** Optional sides for reopening the agent diff tab. */
+  original?: string;
+  modified?: string;
+};
+
+export type ChatCommandResult = {
+  command: string;
+  exitCode: number;
+  excerpt?: string;
+};
+
+export type ChatPlanStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type ChatPlanItem = {
+  id: string;
+  content: string;
+  status: ChatPlanStatus;
 };
 
 export interface ChatMessage {
@@ -79,6 +101,10 @@ export interface ChatMessage {
   images?: ChatImageAttachment[];
   /** Files the agent wrote this turn — open in editor + reveal in Explorer. */
   editedFiles?: ChatEditedFile[];
+  /** Shell commands finished this turn (test/fix loop). */
+  commandResults?: ChatCommandResult[];
+  /** Agent manage_plan steps for this turn. */
+  planItems?: ChatPlanItem[];
 }
 
 interface ChatState {
@@ -103,7 +129,15 @@ interface ChatState {
   updateMessage: (
     id: string,
     patch: Partial<
-      Pick<ChatMessage, "content" | "modelLabel" | "images" | "editedFiles">
+      Pick<
+        ChatMessage,
+        | "content"
+        | "modelLabel"
+        | "images"
+        | "editedFiles"
+        | "commandResults"
+        | "planItems"
+      >
     >,
   ) => void;
   clearMessages: () => void;
@@ -161,6 +195,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           modelLabel: msg.modelLabel,
           images: msg.images,
           editedFiles: msg.editedFiles,
+          commandResults: msg.commandResults,
+          planItems: msg.planItems,
         },
       ],
     }));

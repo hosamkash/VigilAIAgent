@@ -24,6 +24,68 @@ import {
   setConfiguredVigilDbPath,
 } from "../lib/vigil-db";
 import { ChatPreferencesFields } from "./ChatQuickSettings";
+import { useAgentSettingsStore } from "../store/agentSettingsStore";
+
+function AgentAutoRunSettings() {
+  const agentAutoRun = useAgentSettingsStore((s) => s.agentAutoRun);
+  const setAgentAutoRun = useAgentSettingsStore((s) => s.setAgentAutoRun);
+  const commandAllowlist = useAgentSettingsStore((s) => s.commandAllowlist);
+  const setCommandAllowlist = useAgentSettingsStore((s) => s.setCommandAllowlist);
+  const pathDenylist = useAgentSettingsStore((s) => s.pathDenylist);
+  const setPathDenylist = useAgentSettingsStore((s) => s.setPathDenylist);
+  return (
+    <div className="rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-4">
+      <h3 className="text-sm font-semibold">Agent tools</h3>
+      <p className="mt-1 text-xs text-[var(--vigil-muted)]">
+        By default Vigil asks before writing files, applying patches, or running
+        shell commands (safer for client projects). Turn on Auto-run only when you
+        trust the workspace — like Cursor Auto-run / yolo.
+      </p>
+      <label className="mt-3 flex items-start justify-between gap-3 text-sm">
+        <span>
+          Auto-run tools
+          <div className="text-xs text-[var(--vigil-muted)]">
+            Skip Allow / Skip prompts for write_file, apply_patch, and run_commands.
+            Off = approve each command unless it matches the allowlist below.
+          </div>
+        </span>
+        <input
+          type="checkbox"
+          checked={agentAutoRun}
+          onChange={(e) => setAgentAutoRun(e.target.checked)}
+        />
+      </label>
+      <label className="mt-3 block text-sm">
+        Command allowlist
+        <div className="mb-1 text-xs text-[var(--vigil-muted)]">
+          One pattern per line. Even with Auto-run off, matching commands run
+          without a prompt (e.g. <code>npm test</code>, <code>npx vitest*</code>).
+        </div>
+        <textarea
+          className="mt-1 h-24 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 font-mono text-[12px] outline-none focus:border-[var(--vigil-accent)]"
+          value={commandAllowlist.join("\n")}
+          onChange={(e) =>
+            setCommandAllowlist(e.target.value.split("\n").map((line) => line.trim()))
+          }
+        />
+      </label>
+      <label className="mt-3 block text-sm">
+        Sensitive path denylist
+        <div className="mb-1 text-xs text-[var(--vigil-muted)]">
+          Writes to matching paths always ask for approval — even with Auto-run on
+          (e.g. <code>.env</code>, <code>**/*.pem</code>).
+        </div>
+        <textarea
+          className="mt-1 h-24 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 font-mono text-[12px] outline-none focus:border-[var(--vigil-accent)]"
+          value={pathDenylist.join("\n")}
+          onChange={(e) =>
+            setPathDenylist(e.target.value.split("\n").map((line) => line.trim()))
+          }
+        />
+      </label>
+    </div>
+  );
+}
 
 const PROVIDERS: { id: ApiKeyProvider; label: string }[] = [
   { id: "openai", label: "OpenAI" },
@@ -404,6 +466,7 @@ export function SettingsPanel() {
               <div className="rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-4">
                 <ChatPreferencesFields />
               </div>
+              <AgentAutoRunSettings />
             </div>
           )}
 

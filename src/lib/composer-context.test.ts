@@ -39,12 +39,33 @@ const folderChip: ComposerContextChip = {
   path: "/Users/me/proj/src/components",
 };
 
+const selectionChip: ComposerContextChip = {
+  id: "4",
+  kind: "selection",
+  title: "L10–14",
+  detail: "src/App.tsx",
+  text: "const x = 1;",
+  path: "/Users/me/proj/src/App.tsx",
+  line: 10,
+  endLine: 14,
+};
+
 describe("composer context formatting", () => {
   it("keeps a compact label for the composer", () => {
     expect(formatComposerChipLabels([terminalChip])).toBe("@Terminal (L12–18)");
     expect(formatComposerChipLabels([fileChip, folderChip])).toBe(
       "@src/App.tsx @src/components",
     );
+    expect(formatComposerChipLabels([selectionChip])).toBe(
+      "@src/App.tsx (L10–14)",
+    );
+  });
+
+  it("expands code selection with path and line range", () => {
+    const out = formatComposerContext([selectionChip]);
+    expect(out).toContain("[Code selection: src/App.tsx L10–14]");
+    expect(out).toContain("path: /Users/me/proj/src/App.tsx");
+    expect(out).toContain("const x = 1;");
   });
 
   it("expands the full terminal block for the agent", () => {

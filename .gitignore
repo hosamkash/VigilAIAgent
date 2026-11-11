@@ -1,3 +1,6 @@
+# Local BM25 / chunk code index (project rules under .vigil/ stay commit-able)
+.vigil/code-index.json
+
 # Logs
 logs
 *.log

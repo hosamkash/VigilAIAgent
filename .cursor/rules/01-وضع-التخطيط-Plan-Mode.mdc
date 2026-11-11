@@ -1,0 +1,285 @@
+---
+description: "01 وضع التخطيط (Plan Mode) — نفّذ أولًا"
+alwaysApply: true
+---
+
+<!-- ===== فهرس عربي / اقرأني أول ===== -->
+**أولوية التنفيذ: 01** — وضع التخطيط (Plan Mode) — نفّذ أولًا
+
+> **بالعربي (الغرض):** قبل ما نكتب كود كبير: نناقش → نعدّل خطة → نوافق → ننفّذ. أساس تسليم الخطط من الويب للديسكتوب.
+
+> **ملاحظة:** التفاصيل بالإنجليزي زي ما هي. سطر «عربي» فوق كل عنوان = ترجمة سريعة وأنت بتلف.
+
+**فهرس سريع:**
+- المشكلة اللي بنحلها
+- رحلة المستخدم المثالية
+- شكل بيانات الخطة (الموديل)
+- نقاط قوة Cursor اللي هنطابقها
+- نقاط ضعف Cursor — إحنا هنعمل أحسن
+- علاقتها باللي موجود في Vigil دلوقتي
+- شرائح التنفيذ بالترتيب
+- معايير القبول — امتى نخلص؟
+- قرارات لسه مفتوحة
+- صندوق الأفكار
+- حاجات مش في النطاق / خطوط حمراء
+
+**ترتيب الملفات:** `00` عامة → `01` Plan Mode → `02` جسر سحابة → `03` ويب → `04` دعم/SQL → `05` EXE → `06` أمان
+<!-- ===== نهاية الفهرس العربي ===== -->
+
+# Vigil Plan Mode — Focus Spec (Do Not Implement Until Roadmap Says Go)
+
+**Status:** SPEC / PLANNING ONLY — no code until the user explicitly starts execution.  
+**Priority:** Critical product pillar (reordered above IDE LSP in the living roadmap).  
+**Related living plan:** `.cursor/rules/00-الخطة-العامة-والأولويات.mdc`  
+**Existing related pieces (reuse, don’t reinvent blindly):**
+- Runtime checklist today: `manage_plan` + `AgentPlanCard` (during a turn only)
+- Product roadmap file is meta for building Vigil — not the in-app Plan Mode
+
+---
+
+> **عربي:** المشكلة اللي بنحلها
+
+## 1. Problem statement
+
+Today Vigil can show a **mid-execution** todo list (`manage_plan`). That is **not** Cursor Plan Mode.
+
+Users need:
+
+1. Discuss a feature / bug / refactor in chat  
+2. Agent (or Plan Mode) produces a **structured plan**  
+3. User reviews / edits / reorders / removes steps  
+4. User explicitly says **Approve / Execute**  
+5. Agent executes **step by step** against that approved plan (visible progress, resumable)
+
+Without this, large work is easy to derail, skip steps, or start coding before alignment.
+
+---
+
+> **عربي:** رحلة المستخدم المثالية
+
+## 2. North-star UX (Vigil Plan Mode)
+
+> **عربي:** أوضاع Plan مقابل Agent
+
+### Modes
+- [ ] **Chat / Agent mode** — current behavior (can still call `manage_plan` for ad-hoc loops)
+- [ ] **Plan mode** — planning-first; default tools are read/search/investigate; **no writes** until Execute
+- [ ] Clear mode indicator in chat UI (Plan vs Agent)
+- [ ] One-click switch: Plan ↔ Agent (with confirmation if an approved plan is mid-run)
+
+> **عربي:** قسم — Happy path
+
+### Happy path
+1. User: describes goal (Arabic or English)  
+2. Vigil enters Plan mode (manual toggle **or** auto-suggest when task is large/multi-file)  
+3. Vigil gathers just enough context (deep index / `parallel_investigate` / open files / rules)  
+4. Vigil outputs a **Plan artifact** (not only markdown prose):
+   - Title, goal, assumptions, risks
+   - Ordered steps with status, optional file hints, optional acceptance checks
+5. User can:
+   - Edit step text  
+   - Add / delete / reorder steps  
+   - Mark a step as optional / blocked  
+   - Ask to “revise plan” with feedback without executing  
+6. User clicks **Execute plan** (or says موافق نفّذ)  
+7. Agent runs with the approved plan as **source of truth**:
+   - Exactly one `in_progress`  
+   - Updates step status as it goes  
+   - Does not silently invent a parallel conflicting checklist unless synced into the same plan  
+8. On completion: summary mapped to steps (done / skipped / failed) + files changed + tests run
+
+> **عربي:** الحفظ والاستمرارية
+
+### Persistence
+- [ ] Plans are **first-class artifacts** (survive tab reload / app restart)
+- [ ] **Primary storage: Firestore** (account-scoped) once Cloud Bridge ships — see `02-جسر-السحابة-الموحد.mdc`
+- [ ] Optional local cache / export (VigilDB or `.vigil/plans/`) — **not** the long-term SoR
+- [ ] List past plans; reopen; clone; archive
+- [ ] Link plan ↔ chat tab / session id
+
+> **عربي:** قواعد زر التنفيذ
+
+### Execute semantics
+- [ ] Hard gate: **no write_file / apply_patch / push / PR** while in Plan mode before Execute  
+- [ ] After Execute: normal tool policies + Auto-run rules still apply  
+- [ ] Pause / Resume / Stop mid-plan  
+- [ ] If user interrupts, plan remains with last statuses (not lost)  
+- [ ] Failed step: mark `failed`, propose recovery options (retry step / revise plan / continue with remaining)
+
+---
+
+> **عربي:** شكل بيانات الخطة (الموديل)
+
+## 3. Plan artifact model (target shape)
+
+Conceptual fields (final schema at implement time):
+
+```text
+Plan {
+  id, title, goal, status: draft|approved|running|completed|failed|cancelled
+  createdAt, updatedAt, workspaceRoot, chatTabId?
+  assumptions[], risks[]
+  steps: [{
+    id, content, status: pending|in_progress|completed|cancelled|failed|skipped
+    optional?, blockedByStepIds[]
+    hints: { files[], symbols[], commands[] }
+    acceptance?: string   // e.g. "npm test passes", "F12 works on fixture"
+  }]
+  execution?: { startedAt, finishedAt, lastError? }
+}
+```
+
+UI:
+- [ ] Plan panel / card richer than today’s `AgentPlanCard` (editable in draft; read-only statuses while running unless “revise”)
+- [ ] Diff of plan revisions (v1 → v2) optional but valuable
+
+---
+
+> **عربي:** نقاط قوة Cursor اللي هنطابقها
+
+## 4. Cursor strengths to match (parity)
+
+- [ ] Dedicated planning phase before code changes  
+- [ ] Structured steps the user can see  
+- [ ] Explicit user confirmation to build/execute  
+- [ ] Progress through steps during execution  
+- [ ] Ability to refine the plan from conversation  
+
+---
+
+> **عربي:** نقاط ضعف Cursor — إحنا هنعمل أحسن
+
+## 5. Cursor weaknesses → Vigil improvements (beat Cursor)
+
+These are intentional product differentiators — keep them in scope:
+
+> **عربي:** تحسينات ضد Cursor
+
+### Clarity & control
+- [ ] **True editability** of steps before execute (not “ask the model to rewrite the whole plan” only)
+- [ ] **Reorder by drag** (or clear up/down) without regenerating everything  
+- [ ] **Optional / must** step flags so the agent doesn’t treat every bullet as sacred  
+- [ ] **Acceptance checks** per step (tests, search query, manual note) — Cursor often leaves this vague  
+
+> **عربي:** تحسينات ضد Cursor
+
+### Continuity
+- [ ] Plans **persist** and are resumable after crash / close / Stop  
+- [ ] Mid-run Stop doesn’t orphan the plan  
+- [ ] “Continue plan” restores context from plan + compact chat memory + deep index  
+
+> **عربي:** تحسينات ضد Cursor
+
+### Grounding in large repos (Vigil advantage)
+- [ ] Plan generation should **cite** deep index / defs / refs / project map (links or paths)  
+- [ ] Steps can attach `hints.files` / `hints.symbols` from `search_codebase` / `find_definition`  
+- [ ] Prefer `parallel_investigate` during Plan mode for cheap grounding before proposing steps  
+
+> **عربي:** تحسينات ضد Cursor
+
+### Parallel & ops awareness
+- [ ] Plan can mark steps as `parallelizable` → later map to `delegate_tasks` / worktrees  
+- [ ] Explicit ops steps: test gate, `push_and_check_ci`, draft PR — first-class, not afterthoughts  
+- [ ] Dangerous steps visually flagged (push, delete, migrate)  
+
+> **عربي:** تحسينات ضد Cursor
+
+### Honesty & anti-drift
+- [ ] Agent must not mark a step completed without evidence (file change, test result, or explicit N/A reason)  
+- [ ] If execution drifts from plan, require **plan amendment** (user-visible) instead of silent divergence  
+- [ ] Don’t start coding while still answering “what should we do?” in Plan mode  
+
+> **عربي:** تحسينات ضد Cursor
+
+### Language & accessibility
+- [ ] Plan UI and steps follow user’s language (Arabic/English) like the rest of Vigil  
+- [ ] Compact, readable steps — avoid huge walls of text; details expandable  
+
+> **عربي:** تحسينات ضد Cursor
+
+### Privacy / cloud boundary
+- [ ] Plan **text/steps** may live in Firestore (user account); **never** attach private repo file contents to the cloud plan
+- [ ] Desktop Execute uses local workspace only 
+
+---
+
+> **عربي:** علاقتها باللي موجود في Vigil دلوقتي
+
+## 6. Interaction with existing systems
+
+| Existing | Role after Plan Mode ships |
+|----------|----------------------------|
+| `manage_plan` | Becomes the **execution updater** for an approved Plan (or merges into it) — not a substitute for draft/approve |
+| `AgentPlanCard` | Evolve into / feed **Plan Panel** (draft editable + running statuses) |
+| Deep index / LSP-lite tools | Allowed in Plan mode (read-only investigation) |
+| `delegate_tasks` | Only after Execute, and only for steps marked parallelizable |
+| `00-الخطة-العامة-والأولويات.mdc` | Meta roadmap for building Vigil — separate from in-app user plans |
+| Auto-run / approvals | Still apply during Execute; Plan mode itself is the first gate |
+
+---
+
+> **عربي:** شرائح التنفيذ بالترتيب
+
+## 7. Implementation slices (for when execution starts — not now)
+
+Ordered for dependency / value:
+
+1. **Data model + local persistence** for Plan artifacts  
+2. **Plan mode flag** in chat UI + system prompt branch (read-only tools)  
+3. **Generate plan** tool/flow → structured steps in UI  
+4. **Edit / reorder / approve** UX + Execute gate  
+5. **Execution loop** bound to approved plan (status updates, anti-drift)  
+6. **Pause / resume / fail recovery**  
+7. **Plan history** list + reopen  
+8. **Polish:** parallelizable steps, acceptance checks, citations from index  
+9. **Tests:** model parsing, persistence round-trip, gate blocks writes in Plan mode, execute advances statuses  
+
+Each slice: implement → `npm test` (+ `tsc` if UI) → check off here **and** in `00-الخطة-العامة-والأولويات.mdc`.
+
+---
+
+> **عربي:** معايير القبول — امتى نخلص؟
+
+## 8. Acceptance criteria (product done)
+
+- [ ] User can discuss a multi-file feature, get a draft plan, edit it, approve, and only then see writes  
+- [ ] Stopping mid-run leaves a resumable plan  
+- [ ] Running plan shows live step statuses in UI  
+- [ ] Plan mode cannot apply_patch/write_file before Execute (enforced in sidecar policies, not only prompt)  
+- [ ] Arabic and English goals both produce usable plans  
+- [ ] Tests cover persistence + write-gate + status transitions  
+
+---
+
+> **عربي:** قرارات لسه مفتوحة
+
+## 9. Open decisions (resolve at implement time; document choice here)
+
+- [ ] Storage: Firestore primary; optional local cache path (VigilDB / `.vigil/plans/`)
+- [ ] Auto-enter Plan mode heuristics (size / keywords / user setting default)  
+- [ ] Whether Execute spawns a new agent turn or continues the same session  
+- [ ] How tightly `manage_plan` merges vs replaces the approved Plan steps  
+
+---
+
+> **عربي:** صندوق الأفكار
+
+## 10. Ideas inbox (append anytime)
+
+_User/agent: add new Plan Mode ideas below with date; promote into sections when accepted._
+
+- 2026-11-11: Initial focus spec created from product discussion (Cursor-class plan → approve → execute + beat Cursor gaps).  
+- 2026-11-11: Plans must be **syncable** to Firestore for Unified Cloud Bridge (web draft/approve → desktop Execute). See `02-جسر-السحابة-الموحد.mdc`. Keep artifact portable; no project files in cloud.  
+- 2026-11-11: Plan persistence aligned with product decision — **Firestore is SoR**; local storage optional cache only.  
+- 
+
+---
+
+> **عربي:** حاجات مش في النطاق / خطوط حمراء
+
+## 11. Explicit non-goals (for v1)
+
+- Cloud-synced collaborative plans  
+- Full project-management (assignees, sprints)  
+- Replacing the meta `00-الخطة-العامة-والأولويات.mdc` with in-app plans  
+- Implementing this wave before the user says to start execution  

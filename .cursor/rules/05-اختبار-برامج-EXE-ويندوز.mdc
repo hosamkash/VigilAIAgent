@@ -1,0 +1,654 @@
+---
+description: "05 اختبار واكتشاف شاشات EXE (ويندوز)"
+alwaysApply: true
+---
+
+<!-- ===== فهرس عربي / اقرأني أول ===== -->
+**أولوية التنفيذ: 05** — اختبار واكتشاف شاشات EXE (ويندوز)
+
+> **بالعربي (الغرض):** زي المتصفح الداخلي بس للبرامج المغلقة من غير سورس.
+
+> **ملاحظة:** التفاصيل بالإنجليزي زي ما هي. سطر «عربي» فوق كل عنوان = ترجمة سريعة وأنت بتلف.
+
+**فهرس سريع:**
+- قصة المنتج للمستخدم
+- الواقع الحالي مقابل الفكرة
+- إجابات مقفولة
+- قسم — 3. Personas & jobs-to-be-done
+- رحلة المستخدم المثالية
+- واجهات الـ IDE
+- عقد الأدوات
+- محرك اكتشاف الشاشات
+- تشغيل وربط الـ EXE
+- تغطية أنواع الواجهات
+- سكرين وOCR
+- تسجيل وإعادة تشغيل
+- اللوجن وكلمات السر
+- تكامل مع باقي Vigil
+- أمان وحدود
+- اعتمادية وأداء
+- قسم — 16. Localization
+- تعبئة للمطوّرين
+- حلم التشغيل عن بُعد
+- أحلام مؤجلة
+- مراحل التسليم
+- معايير القبول — امتى نخلص؟
+- قرارات لسه مفتوحة
+- صندوق الأفكار
+- حاجات مش في النطاق / خطوط حمراء
+- أماكن التنفيذ في الكود
+
+**ترتيب الملفات:** `00` عامة → `01` Plan Mode → `02` جسر سحابة → `03` ويب → `04` دعم/SQL → `05` EXE → `06` أمان
+<!-- ===== نهاية الفهرس العربي ===== -->
+
+# Vigil Desktop EXE Runtime Tester — Complete Spec
+
+**What this file is:** the **full dream + contract** for testing and discovering **installed / running Windows EXE** apps from Vigil — especially closed-source **C# .NET + SQL Server** line-of-business apps — **without needing source code**.  
+**Status:** MVP **partially shipped**; expand/finish only when user starts execution. Do not lose ideas from this file.  
+**Sibling analogy:** Vigil Browser = web pages; this = desktop EXE (like “browser for WinForms”).  
+**Related docs:**  
+- Browser: `sidecar/browser.mjs`, `src/components/BrowserView.tsx`  
+- Support / SQL: `.cursor/rules/04-دعم-فني-وقواعد-البيانات.mdc`  
+- Tickets / ADO: same support spec §7  
+- Plan Mode: `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc`  
+- Roadmap: `.cursor/rules/00-الخطة-العامة-والأولويات.mdc` §2c  
+
+**Copy into other repos if needed:** keep this filename; desktop implementation lives in VigilAIAgent.
+
+---
+
+> **عربي:** قصة المنتج للمستخدم
+
+## 0. Why this exists (product story)
+
+1. Developer or support engineer changes SQL / config / a patched DLL.  
+2. They must **verify the real installed EXE** on Windows (not only unit tests).  
+3. There is often **no documentation** and **no source** for “which menu opens which screen.”  
+4. Today humans click around blindly or paste screenshots into ChatGPT.  
+5. Vigil should: **launch or attach → see the live UI tree → answer “فين الشاشة؟” / “فيها خاصية X؟” → click/type a test path → optional screenshot → optional ticket / Plan verify step.**
+
+**Differentiator vs Cursor:** Cursor is source-repo centric. Vigil already has Vigil Browser for web; finishing EXE Runtime makes Vigil the tool for **legacy closed LOB apps** common in Egyptian/ERP shops (WinForms + DevExpress + SQL Server).
+
+---
+
+> **عربي:** الواقع الحالي مقابل الفكرة
+
+## 1. Reality check — shipped vs missing
+
+> **عربي:** قسم — 1.1 Already in the repo (MVP)
+
+### 1.1 Already in the repo (MVP)
+
+| Piece | Path | Notes |
+|-------|------|--------|
+| FlaUI UIA3 driver | `tools/vigil-ui-driver/` (`Program.cs`, README) | WinForms + DevExpress stated |
+| Protocol | NDJSON stdin/stdout | ops: ping, launch, attach, snapshot, click, type, read, wait, close |
+| Node bridge | `sidecar/desktop-app.mjs` | resolve driver path, spawn, pending queue |
+| Tests (thin) | `sidecar/desktop-app.test.mjs` | platform / path smoke — no FlaUI CI |
+| Agent tools | `sidecar/tools.mjs` | `app_launch`, `app_attach`, `app_snapshot`, `app_click`, `app_type`, `app_read`, `app_wait`, `app_close` |
+| System prompt | `sidecar/index.mjs` | WinForms flow mentioned |
+| Env override | `VIGIL_UI_DRIVER` | custom driver exe path |
+| Platform gate | `isWindowsDesktopHost()` | non-Windows → clear error |
+| Worker/delegate | `app_*` **blocked** in nested workers | keep — desktop UI is single-seat |
+
+> **عربي:** قسم — 1.2 Missing / unfinished (do not forget)
+
+### 1.2 Missing / unfinished (do not forget)
+
+- [ ] `app_screenshot` (+ chat image like `browser_screenshot`)  
+- [ ] `app_select` / expand / scroll / right-click / double-click / drag  
+- [ ] Screen-map builder + search (“find screen”) skill  
+- [ ] Installed-app discovery (Start Menu / Program Files / registry uninstall keys)  
+- [ ] Saved **App profiles** (path, args, working dir, login macro)  
+- [ ] Desktop session chrome in IDE UI (parity with Browser tab)  
+- [ ] OCR / vision fallback for empty AutomationIds  
+- [ ] WPF validation + docs  
+- [ ] Replay / record regression scripts  
+- [ ] Vendor or CI publish of `vigil-ui-driver.exe`  
+- [ ] Arabic/English discovery playbooks in system prompt  
+- [ ] Glue to Support tickets, Plan Mode verify steps, DB Copilot  
+- [ ] Remote Windows agent (Mac Vigil → Windows box)  
+- [ ] HWND embed inside Vigil (optional dream — not required)  
+
+---
+
+> **عربي:** إجابات مقفولة
+
+## 2. Hard answers (locked product decisions)
+
+> **عربي:** قسم — 2.1 Can we inspect a closed EXE at runtime without source?
+
+### 2.1 Can we inspect a closed EXE at runtime without source?
+
+**Yes — via Windows UI Automation (primary), not via reading C# source.**
+
+| Layer | Use when | Without source? |
+|-------|----------|-----------------|
+| **UIA / FlaUI snapshot** | Standard WinForms, many DevExpress controls | **Yes — primary** |
+| **Screenshot + vision/OCR** | Owner-draw, empty Name/AutomationId | Yes — secondary |
+| **Coordinate click** from screenshot boxes | Last resort | Yes |
+| **ILSpy / metadata / reflection attach** | Rare deep dreams | Semi — opt-in, careful legally |
+| **Process memory scraping** | Secrets, internals | **Forbidden** |
+
+Closed EXE ≠ invisible. Same family as Inspect.exe / FlaUI / WinAppDriver. Already started.
+
+> **عربي:** قسم — 2.2 Where does live automation run?
+
+### 2.2 Where does live automation run?
+
+- **Phase 1:** Vigil Desktop **on Windows** co-located with the EXE (LAN SQL apps usually live there anyway).  
+- **Later dream:** Remote Windows worker / RDP session agent so Mac users can still drive a lab PC.  
+- **Not:** pure browser-only control of WinForms (no TDS-like socket for HWND from the web).
+
+> **عربي:** علاقتها بـ Vigil Browser
+
+### 2.3 Relationship to Vigil Browser
+
+| | Vigil Browser | Desktop EXE Runtime |
+|-|---------------|---------------------|
+| Tools prefix | `browser_*` | `app_*` |
+| Tree | DOM | UIA |
+| Preview | iframe / BrowserView | External window + Vigil panel (dream) |
+| Screenshot | Yes | Must add |
+| OS | Any (Playwright) | Windows |
+
+Never merge the two tool namespaces; same chat may use both.
+
+---
+
+> **عربي:** قسم — 3. Personas & jobs-to-be-done
+
+## 3. Personas & jobs-to-be-done
+
+| Persona | Job |
+|---------|-----|
+| **Developer** | After SQL/DLL change: launch EXE, verify screen still works, catch regressions |
+| **Support engineer** | “مش فاكر الشاشة فين” — discover path; check if feature exists; evidence for ticket |
+| **QA / tester** | Record short happy-path; replay after builds |
+| **PM** (light) | Watch a guided demo recording / screenshot pack — not drive UIA themselves |
+
+---
+
+> **عربي:** رحلة المستخدم المثالية
+
+## 4. North-star user journeys
+
+> **عربي:** قسم — 4.1 Discover without docs (core dream)
+
+### 4.1 Discover without docs (core dream)
+
+1. Attach to running `CompanyERP.exe` or launch from profile.  
+2. User: «دور على شاشة بتاع مردود المبيعات» / «فين شاشة تسعير الأصناف؟».  
+3. Vigil builds/uses **screen map** (menus + window titles + keywords).  
+4. Reply: `المخازن → تقارير → مردود المبيعات` + refs + optional open it.  
+5. User: «فيها تصدير Excel؟» → snapshot current window → yes/no + control name.
+
+> **عربي:** قسم — 4.2 Verify after change (test dream)
+
+### 4.2 Verify after change (test dream)
+
+1. Plan step or chat: “Verify invoice save on UAT EXE.”  
+2. Launch profile `ERP-UAT`, login macro, navigate known path.  
+3. Type sample, Save, `app_screenshot`, optional DB Copilot check row exists.  
+4. Pass/fail → ticket note or Plan step status.
+
+> **عربي:** قسم — 4.3 Support evidence pack
+
+### 4.3 Support evidence pack
+
+1. Reproduce bug in EXE with agent help.  
+2. Screenshots + control values + window title.  
+3. One-click into **Support Ticket Composer** (see 04-دعم-فني-وقواعد-البيانات.mdc).
+
+> **عربي:** قسم — 4.4 Browser + EXE hybrid app
+
+### 4.4 Browser + EXE hybrid app
+
+Some products are EXE shell + embedded browser. Dream: same session can `app_*` on chrome and `browser_*` if a debug port exists — document when detected; don’t assume.
+
+---
+
+> **عربي:** واجهات الـ IDE
+
+## 5. UX / IDE surfaces (dreams)
+
+- [ ] **Desktop App panel** (editor tab or side pane): attached app name, PID, path, “Snapshot”, “Screenshot”, “Detach”  
+- [ ] **App profiles** picker (like browser favorites): ERP Prod-read, ERP UAT, Crystal runner host, etc.  
+- [ ] **Screen map** view: tree of discovered windows/menus (session-scoped; optional save to Library **without** secrets)  
+- [ ] Chat chips: “Attached: MyApp.exe” like browser URL chip  
+- [ ] Show `app_screenshot` images inline in chat (parity with browser)  
+- [ ] Arabic-first empty states: «وصل التطبيق» / «ابدأ الاكتشاف»  
+- [ ] Calm Support-mode styling when used from Support workspace  
+- [ ] Optional: picture-in-picture / always-on-top helper — low priority  
+- [ ] Dream (later): host foreign HWND in a Vigil pane (Win32 SetParent) — fragile; not Phase A  
+
+---
+
+> **عربي:** عقد الأدوات
+
+## 6. Tooling contract
+
+> **عربي:** قسم — 6.1 Existing tools (keep & harden)
+
+### 6.1 Existing tools (keep & harden)
+
+| Tool | Purpose |
+|------|---------|
+| `app_launch` | Start EXE by path or `'project'` workspace heuristic |
+| `app_attach` | Attach by PID or process/window name substring |
+| `app_snapshot` | UIA tree with refs `[e1]…` |
+| `app_click` | Click by ref |
+| `app_type` | Type into field by ref (clear default true) |
+| `app_read` | Read name/value/AutomationId |
+| `app_wait` | Wait for name/AutomationId or sleep |
+| `app_close` | Close app + stop driver |
+
+> **عربي:** قسم — 6.2 Tools to add (do not forget)
+
+### 6.2 Tools to add (do not forget)
+
+| Tool | Purpose |
+|------|---------|
+| `app_screenshot` | PNG/JPEG of main or focused window → chat |
+| `app_select` | Combo/list/select by ref + value |
+| `app_expand` | Tree/node expand |
+| `app_scroll` | Scroll into view |
+| `app_keys` | Global or focused hotkeys (Alt+F, Ctrl+S) |
+| `app_right_click` / `app_double_click` | Context menus / activate |
+| `app_focus_window` | Switch among multiple top-level windows |
+| `app_list_windows` | Titles of open windows for this process |
+| `app_search_ui` | Fuzzy search current snapshot (AR/EN) → refs |
+| `app_screen_map` | Crawl menus (bounded depth) → structured map JSON |
+| `app_record_start` / `app_record_stop` | Capture click/type sequence |
+| `app_replay` | Replay recorded steps with waits |
+| `app_profiles_list` / save | Manage local profiles |
+| `app_discover_installed` | Search Program Files / Start Menu / uninstall registry for name |
+| `app_ocr_snapshot` | OCR text boxes over screenshot (opt-in) |
+| `app_click_xy` | Coordinate click relative to window (last resort) |
+
+> **عربي:** قسم — 6.3 Driver protocol ops to add
+
+### 6.3 Driver protocol ops to add
+
+Mirror new tools in `vigil-ui-driver` NDJSON: `screenshot`, `select`, `keys`, `windows`, `search`, `ocr`, `click_xy`, … keep version field (`version: 1` → bump when breaking).
+
+> **عربي:** قسم — 6.4 Snapshot payload dreams
+
+### 6.4 Snapshot payload dreams
+
+Each element ideally includes: `ref`, `controlType`, `name`, `automationId`, `value`, `isEnabled`, `isOffscreen`, `helpText`, `className` (when available), `boundingRect` (for screenshot overlays), `patterns` (Invoke/Value/Selection…).
+
+Cap tree size (like browser e1…e80) with expand-on-demand for large DevExpress grids.
+
+---
+
+> **عربي:** محرك اكتشاف الشاشات
+
+## 7. Screen discovery engine (the “no docs” brain)
+
+> **عربي:** قسم — 7.1 Screen map model
+
+### 7.1 Screen map model
+
+```text
+ScreenMap {
+  appId, exePath, capturedAt
+  windows: [{ title, automationId?, controlsSummary[] }]
+  menuPaths: [{ path: ["ملف","تقارير",…], opensWindowTitle? }]
+  keywordsIndex: { "مردود": [nodeIds], "excel": […] }
+}
+```
+
+- [ ] Build incrementally during a session  
+- [ ] Persist optional **sanitized** map to Library / local `.vigil/app-maps/` (no passwords, no row data)  
+- [ ] Reuse map next time before full crawl  
+
+> **عربي:** قسم — 7.2 Discovery algorithms
+
+### 7.2 Discovery algorithms
+
+- [ ] **Passive:** snapshot main window + open children  
+- [ ] **Menu walk:** open each top-level menu (depth limit, skip Exit) → snapshot → close  
+- [ ] **Ribbon walk:** DevExpress ribbon tabs/groups (when UIA exposes them)  
+- [ ] **MDI / tab walk:** switch documents/tabs  
+- [ ] **Keyword search:** normalize Arabic (ألف/أ) + English fuzzy  
+- [ ] **Feature probe:** look for Button/MenuItem names matching «تصدير»، «Excel»، «طباعة»، «حفظ»  
+
+> **عربي:** قسم — 7.3 Agent playbook (system prompt)
+
+### 7.3 Agent playbook (system prompt)
+
+When user asks discovery questions and an app is attached:
+1. Prefer `app_search_ui` / latest snapshot before clicking randomly.  
+2. If miss → `app_screen_map` or bounded menu walk.  
+3. Confirm with `app_screenshot` when ambiguous.  
+4. Never claim a feature exists without seeing a control or OCR hit.  
+5. Speak Arabic if user did; give menu path as copyable breadcrumb.
+
+---
+
+> **عربي:** تشغيل وربط الـ EXE
+
+## 8. Launch & attach matrix
+
+| Mode | Behavior |
+|------|----------|
+| Absolute path | `C:\Program Files\...\App.exe` |
+| `'project'` | Scan workspace `bin/Debug|Release` (exists) |
+| App profile | Saved path + args + cwd + env |
+| Start Menu / installed search | Dream: `app_discover_installed` |
+| Attach PID | Exists |
+| Attach by window title | Exists (substring) — polish collisions |
+| Attach by process name | Exists — polish multiple instances (pick list) |
+| Elevate / Run as admin | Dream: detect need; prompt user (UAC) |
+| Multiple instances | Dream: list + choose |
+
+Args / working directory / env vars for profiles (e.g. config path) — local only.
+
+---
+
+> **عربي:** تغطية أنواع الواجهات
+
+## 9. Framework coverage dreams
+
+| Stack | Priority | Notes |
+|-------|----------|--------|
+| **WinForms** | P0 | Primary |
+| **DevExpress WinForms** | P0 | Already targeted; grids/ribbons need extra patterns |
+| **WPF** | P1 | UIA works differently — fixture + docs |
+| **WinUI 3** | P2 | Later |
+| **Electron / CEF shell** | P2 | Prefer `browser_*` if CDP; else UIA on chrome only |
+| **Delphi / VCL** | P2 | UIA varies — try snapshot honesty |
+| **Java Swing** | P3 | Out unless demanded |
+| **Qt** | P3 | Same |
+
+Honest errors > fake success when tree is empty.
+
+---
+
+> **عربي:** سكرين وOCR
+
+## 10. Screenshots, OCR, vision
+
+- [ ] Capture main window / focused control / full virtual screen (opt-in)  
+- [ ] Redact optional regions later  
+- [ ] Overlay refs on screenshot for humans (dream)  
+- [ ] OCR (Windows OCR / Tesseract / cloud vision — decide) when UIA names blank  
+- [ ] Vision model describes “what’s on screen” for support (metered)  
+- [ ] Never upload screenshots to Firestore by default — chat/local unless user pins to ticket  
+
+---
+
+> **عربي:** تسجيل وإعادة تشغيل
+
+## 11. Recording, replay, regression
+
+- [ ] Record: click/type/wait/screenshot steps with human-readable names  
+- [ ] Save as `.vigil/ui-replays/*.json` local (or Library metadata without pixels)  
+- [ ] Replay with tolerances (wait longer on slow SQL apps)  
+- [ ] Diff: last screenshot vs baseline (pixel or perceptual hash) — dream  
+- [ ] Plan Mode step type: `verify_ui_replay`  
+- [ ] CI on Windows self-hosted runner — dream  
+
+---
+
+> **عربي:** اللوجن وكلمات السر
+
+## 12. Login & credentials (careful)
+
+- [ ] Profile may store **username**; password in OS keychain only  
+- [ ] Login macro: sequence of refs or “type user → tab → type pass → click دخول”  
+- [ ] Detect login window by title keywords (دخول، Login، تسجيل)  
+- [ ] Never log passwords into chat, snapshots exported to cloud, or ADO tickets  
+- [ ] Prefer user already logged in + **Attach** for support sessions  
+
+---
+
+> **عربي:** تكامل مع باقي Vigil
+
+## 13. Integration with the rest of Vigil
+
+> **عربي:** قسم — 13.1 Support / DB Copilot
+
+### 13.1 Support / DB Copilot
+
+- [ ] Same incident: UI value vs SQL row (`04-دعم-فني-وقواعد-البيانات.mdc`)  
+- [ ] After Save in EXE → query table → confirm  
+- [ ] Report binder: open Crystal host EXE if separate; or dataset SQL in DB mode  
+- [ ] **Capture SQL while UI acts:** Start Activity Capture → open report / `app_click` → Stop → show batches (see 04-دعم-فني-وقواعد-البيانات.mdc **§5.1 Vigil Profiler**) — replaces SQL Profiler + SPID hunting for support  
+ 
+
+> **عربي:** قسم — 13.2 Support Tickets / Azure DevOps
+
+### 13.2 Support Tickets / Azure DevOps
+
+- [ ] “Add UI evidence” → screenshots + menu path + window title into ticket draft  
+- [ ] Publish to ADO with attachments via API when possible  
+
+> **عربي:** قسم — 13.3 Plan Mode
+
+### 13.3 Plan Mode
+
+- [ ] Step hints: `app_profile`, `replayId`, acceptance “screenshot shows X”  
+- [ ] Execute gate still applies; UI clicks are “writes” to the app — respect Auto-run / approvals  
+
+> **عربي:** قسم — 13.4 Approvals policy
+
+### 13.4 Approvals policy
+
+- [ ] `app_launch` / `app_click` / `app_type` may need approval when Auto-run off (match browser policy style)  
+- [ ] Destructive labels: close app, delete-button clicks — extra confirm  
+
+> **عربي:** قياس الاستهلاك والمحفظة
+
+### 13.5 Metering
+
+- [ ] `surface: desktop-exe` usage events  
+- [ ] Vision/OCR calls cost more — show in Usage  
+
+---
+
+> **عربي:** أمان وحدود
+
+## 14. Security & guardrails
+
+- [ ] Windows only for live driver (unless remote worker explicitly designed)  
+- [ ] No memory scraping / credential dumping from other processes  
+- [ ] No silent decompile of customer EXE as default product path  
+- [ ] Snapshots may include business data on screen — treat like PII; don’t sync full trees to Firestore  
+- [ ] Driver runs local; don’t expose NDJSON port on LAN  
+- [ ] Nested delegates cannot drive UI (already blocked) — keep  
+- [ ] User must be able to Detach / Emergency Stop clicks  
+
+---
+
+> **عربي:** اعتمادية وأداء
+
+## 15. Reliability & performance
+
+- [ ] Wait strategies: busy indicators, SQL lag (configurable timeouts)  
+- [ ] Retry click if element offscreen → scroll  
+- [ ] Recover if app restarts (re-attach)  
+- [ ] Bound menu crawl time (e.g. 60–120s) with progress  
+- [ ] Don’t freeze Vigil UI — driver IPC async  
+- [ ] Large grids: virtualization → only visible rows in snapshot; document limit  
+
+---
+
+> **عربي:** قسم — 16. Localization
+
+## 16. Localization
+
+- [ ] Arabic + English UI strings in discovery matching  
+- [ ] RTL menu labels  
+- [ ] Normalize Alef/Ya Arabic variants in search  
+- [ ] Agent answers in user’s language  
+
+---
+
+> **عربي:** تعبئة للمطوّرين
+
+## 17. DevEx / packaging
+
+- [ ] README already: `dotnet publish` → `tools/vigil-ui-driver/publish/`  
+- [ ] First-run: if driver missing, show install/build instructions in Arabic/English  
+- [ ] Optional: ship driver in Windows Vigil installer  
+- [ ] `VIGIL_UI_DRIVER` env for custom builds  
+- [ ] Fixture app (`tools/vigil-ui-fixture`) tiny WinForms for tests — dream  
+- [ ] Windows CI job for driver + smoke — dream  
+
+---
+
+> **عربي:** حلم التشغيل عن بُعد
+
+## 18. Remote Windows dream (later)
+
+```text
+Mac/Linux Vigil (chat UI)
+    → Secure tunnel / VPN
+Windows lab agent (driver + EXE + maybe SQL)
+    → returns snapshots/screenshots
+```
+
+- [ ] Explicit product mode “Remote desktop lab”  
+- [ ] Auth between Vigil account and lab agent  
+- [ ] Still no Firestore for raw UI trees by default  
+
+---
+
+> **عربي:** أحلام مؤجلة
+
+## 19. Optional deep dreams (parked, don’t lose)
+
+- [ ] HWND embed in Vigil tab  
+- [ ] Hook .NET debugger / SOS for advanced support (expert mode)  
+- [ ] Read embedded resource strings from EXE for offline dictionary (opt-in, file read — not process hack)  
+- [ ] Compare two EXE versions’ UI maps (upgrade impact)  
+- [ ] Auto-generate training doc “دليل الشاشات” from screen map for the company  
+- [ ] Voice: «افتح شاشة الأصناف»  
+- [ ] Multi-app: ERP + Crystal Reports designer as two profiles in one chat  
+- [ ] Detect connection string **from config files beside EXE** (app.config / json) — file read with user consent — link to DB Copilot profile suggestion  
+- [ ] Hot-reload test: watch folder for new DLL, restart EXE, replay  
+
+---
+
+> **عربي:** مراحل التسليم
+
+## 20. Phased delivery (when execution starts)
+
+> **عربي:** قسم — Phase A — Finish MVP parity with “usable discovery”
+
+### Phase A — Finish MVP parity with “usable discovery”
+1. Harden launch/attach + installed path profiles  
+2. `app_screenshot` + chat images  
+3. `app_search_ui` + prompt playbook for “find screen / has feature”  
+4. Desktop session chip/panel minimum  
+5. Docs + driver missing UX  
+6. Tests: expand smoke; fixture if possible  
+
+> **عربي:** قسم — Phase B — Map & controls depth
+
+### Phase B — Map & controls depth
+1. `app_screen_map` menu crawl  
+2. select/keys/windows/focus  
+3. DevExpress grid/ribbon notes + improvements  
+4. WPF smoke  
+5. Record/replay v1  
+
+> **عربي:** قسم — Phase C — Product glue & delight
+
+### Phase C — Product glue & delight
+1. Support ticket evidence  
+2. Plan Mode verify_ui  
+3. DB Copilot correlate  
+4. OCR fallback  
+5. Installed-app discover  
+6. Screen map Library export (“دليل الشاشات”)  
+
+> **عربي:** قسم — Phase D — Scale
+
+### Phase D — Scale
+1. Remote Windows worker  
+2. CI replays  
+3. Baseline screenshot diffs  
+4. HWND embed experiment  
+
+---
+
+> **عربي:** معايير القبول — امتى نخلص؟
+
+## 21. Acceptance criteria (full vision checklist)
+
+**Must (A)**  
+- [ ] Attach/launch closed WinForms EXE on Windows without source  
+- [ ] Answer “where is screen X?” with menu/window evidence from UIA  
+- [ ] Answer “does this screen have Y?” with control evidence or honest unknown  
+- [ ] Screenshot in chat  
+- [ ] Non-Windows clear error  
+
+**Should (B/C)**  
+- [ ] Screen map persisted for reuse  
+- [ ] Replay verifies a short path after change  
+- [ ] Ticket gets UI evidence in one click  
+- [ ] Optional SQL confirm after UI save  
+
+**Dream (D)**  
+- [ ] Remote lab from Mac  
+- [ ] Auto “دليل الشاشات” for the company  
+- [ ] OCR recovers owner-draw labels  
+
+---
+
+> **عربي:** قرارات لسه مفتوحة
+
+## 22. Open decisions
+
+- [ ] OCR/vision provider  
+- [ ] Ship driver inside installer vs build-on-demand  
+- [ ] Remote worker protocol  
+- [ ] How aggressive default menu crawl is (time/safety)  
+- [ ] Whether config-file connection-string assist is on by default  
+- [ ] Approval defaults for `app_click` in Auto-run  
+
+---
+
+> **عربي:** صندوق الأفكار
+
+## 23. Ideas inbox (append forever)
+
+- 2026-11-11: Spec created from MVP + runtime discovery Q.  
+- 2026-11-11: Expanded to **complete dream contract** — tools, screen map, OCR, replay, Support/Plan/DB glue, remote Windows, دليل الشاشات, config-beside-EXE, HWND embed parked.  
+- 
+
+---
+
+> **عربي:** حاجات مش في النطاق / خطوط حمراء
+
+## 24. Non-goals / guardrails (explicit)
+
+- Not replacing SSMS / full DevExpress testers for every pixel  
+- Not default IL decompile of customer binaries  
+- Not scraping passwords from memory  
+- Not claiming 100% DevExpress/WPF without fixtures  
+- Not driving desktop UI from nested delegate workers  
+- Not uploading full UI trees or screenshots to Firestore by default  
+- Not blocking on HWND-in-tab embed for Phase A  
+
+---
+
+> **عربي:** أماكن التنفيذ في الكود
+
+## 25. Implementation touchpoints (when coding)
+
+| Area | Files / places |
+|------|----------------|
+| Driver | `tools/vigil-ui-driver/Program.cs`, `.csproj`, `README.md` |
+| Bridge | `sidecar/desktop-app.mjs`, `desktop-app.test.mjs` |
+| Tools | `sidecar/tools.mjs` (`app_*`) |
+| Prompt | `sidecar/index.mjs` |
+| Approvals | `sidecar/approvals.mjs` |
+| Chat images | `src/components/ChatPanel.tsx` (mirror browser screenshot handling) |
+| UI panel | new component + `editorTabsStore` or status bar |
+| Profiles | local vault / `.vigil/app-profiles.json` (secrets out) |
+
+After each slice: update checkboxes here **and** `00-الخطة-العامة-والأولويات.mdc` §2c; run `npm test` (+ Windows driver smoke when available).
