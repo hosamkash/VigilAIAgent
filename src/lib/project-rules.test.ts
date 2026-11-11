@@ -20,7 +20,7 @@ describe("formatProjectRulesForAgent", () => {
 
   it("wraps custom rules for the agent", () => {
     const out = formatProjectRulesForAgent("Always use TypeScript.");
-    expect(out).toContain(PROJECT_RULES_REL);
+    expect(out).toContain(".vigil");
     expect(out).toContain("Always use TypeScript.");
   });
 });

@@ -30,6 +30,7 @@ commands.allow = [
   "github_browser_login",
   "sidecar_shared_secret_preview",
   "list_dir",
+  "list_workspace_files",
   "read_text_file",
   "write_text_file",
   "create_dir",

@@ -8,6 +8,9 @@ import { useExplorerStore } from "../store/explorerStore";
 import { useLayoutStore, type SidebarView } from "../store/layoutStore";
 import { useSettingsStore } from "../store/settingsStore";
 import { useTerminalStore } from "../store/terminalStore";
+import { useWorkspaceIndexStore } from "../store/workspaceIndexStore";
+import { useInlineEditStore } from "../store/inlineEditStore";
+import { getMonacoSelectionContext } from "./monaco-bridge";
 
 const MONACO: Record<string, string> = {
   "edit.undo": "undo",
@@ -119,6 +122,9 @@ async function saveOne(tab: EditorTab): Promise<boolean> {
   if (isUntitled(tab.path)) return saveAs(tab);
   await writeTextFile(tab.path, tab.content);
   useEditorTabsStore.getState().markSaved(tab.id);
+  void useWorkspaceIndexStore
+    .getState()
+    .touchSemanticFile(tab.path, tab.content);
   return true;
 }
 
@@ -333,6 +339,15 @@ export async function runCommand(id: string): Promise<void> {
       case "file.clearRecent":
         clearRecentProjects();
         return;
+      case "edit.inline": {
+        const ctx = getMonacoSelectionContext();
+        if (!ctx) {
+          toast("Open a file and select code (or place the cursor on a line).");
+          return;
+        }
+        useInlineEditStore.getState().openAt(ctx);
+        return;
+      }
       case "file.save": {
         const tab = fileTab();
         if (tab) await saveOne(tab);

@@ -35,7 +35,7 @@ export function resolveWorkspacePath(
 
 export async function openAndRevealFile(
   path: string,
-  opts?: { isDir?: boolean },
+  opts?: { isDir?: boolean; revealLine?: number },
 ): Promise<void> {
   const abs = path.trim();
   if (!abs) return;
@@ -48,7 +48,11 @@ export async function openAndRevealFile(
       return;
     }
     const content = await readTextFile(abs);
-    useEditorTabsStore.getState().openFile({ path: abs, content });
+    useEditorTabsStore.getState().openFile({
+      path: abs,
+      content,
+      revealLine: opts?.revealLine,
+    });
   } catch (err) {
     // Dropped folder path may fail as a file read — still reveal in the tree.
     try {

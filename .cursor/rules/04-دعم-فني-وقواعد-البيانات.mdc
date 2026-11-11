@@ -1,0 +1,577 @@
+---
+description: "04 الدعم الفني وقواعد البيانات + التيكتات"
+alwaysApply: true
+---
+
+<!-- ===== فهرس عربي / اقرأني أول ===== -->
+**أولوية التنفيذ: 04** — الدعم الفني وقواعد البيانات + التيكتات
+
+> **بالعربي (الغرض):** SQL Server/Postgres، بروفايلر، Crystal، تيكتات ADO، مساحة PM.
+
+> **ملاحظة:** التفاصيل بالإنجليزي زي ما هي. سطر «عربي» فوق كل عنوان = ترجمة سريعة وأنت بتلف.
+
+**فهرس سريع:**
+- الشخصيات والواجهات
+- قسم — 2. Problem we solve (support loop today)
+- المعمارية والأمان/الشبكة
+- واجهة الاتصال
+- قدرات SQL Server
+- قدرات PostgreSQL
+- مؤلف تيكتات الدعم
+- مساحة مدير المشروعات
+- سلوك الوكيل
+- سحابة ضد محلي
+- عناصر السايدبار
+- نطاق المرحلة 1
+- ترتيب البناء المقترح
+- معايير القبول — امتى نخلص؟
+- قرارات لسه مفتوحة
+- صندوق الأفكار
+- حاجات مش في النطاق / خطوط حمراء
+
+**ترتيب الملفات:** `00` عامة → `01` Plan Mode → `02` جسر سحابة → `03` ويب → `04` دعم/SQL → `05` EXE → `06` أمان
+<!-- ===== نهاية الفهرس العربي ===== -->
+
+# Vigil Support / DB Copilot — Focus Spec
+
+**Status:** SPEC / PLANNING ONLY — no implementation until the user starts execution.  
+**Why:** Vigil is not only for coders. **Technical support** (and later PMs) need AI that can **see live databases** — especially **SQL Server** and **PostgreSQL** — instead of the painful loop: explain schema → AI guesses SQL → paste into SSMS → fail → re-explain. Cursor has no first-class “login to SQL Server and work on the live catalog.” This is a Vigil differentiator.  
+**Related:** `.cursor/rules/03-عقد-مشروع-الويب.mdc`, `.cursor/rules/02-جسر-السحابة-الموحد.mdc`, `.cursor/rules/00-الخطة-العامة-والأولويات.mdc`, `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc`
+
+---
+
+> **عربي:** الشخصيات والواجهات
+
+## 1. Personas & surfaces
+
+| Persona | Primary need | Coding IDE? |
+|---------|--------------|-------------|
+| **Developer** | Repo agent, Plan Mode, LSP, deep index | Yes (desktop) |
+| **Technical support / DBA-lite** | Connect to customer/company SQL, diagnose, write/fix queries, tickets, reports | No — needs **DB Copilot** |
+| **Project manager** (later) | Status, plans, digests, risk notes tied to projects | No — web shell + light tools |
+
+**Product rule:** One Vigil **account / wallet / chat history** (Firestore). Different **workspaces / modes** in the shell:
+- **Code workspace** (repo) — existing desktop strength  
+- **Support / DB workspace** — live SQL connections + schema-aware chat  
+- **PM workspace** (later)
+
+Web sidebar should eventually expose entry points (e.g. **Support**, **Connections**, or Projects typed as `code | support | pm`). Desktop embeds the same web where useful, but **live DB sockets run where the network allows** (see §3).
+
+---
+
+> **عربي:** قسم — 2. Problem we solve (support loop today)
+
+## 2. Problem we solve (support loop today)
+
+Today without DB Copilot:
+1. Support opens SSMS / pgAdmin.  
+2. Copies table names / errors / sample rows into ChatGPT/Cursor.  
+3. AI returns SQL / procedure ideas **blind to real schema**.  
+4. Support pastes back, fixes errors, repeats.  
+5. Reports (Crystal Reports, etc.) stay disconnected from the AI context.
+
+**With Vigil DB Copilot:**
+1. Support **logs into** SQL Server / Postgres from Vigil (their credentials).  
+2. Vigil reads **catalog** (databases → schemas → tables/views/procs/functions).  
+3. Chat / agent answers **grounded** in that catalog (+ optional sample rows / explain plans).  
+4. Run / dry-run SQL in-product with clear safety gates.  
+5. Ticket + query + result stay in the same Vigil chat/plan history.
+
+---
+
+> **عربي:** المعمارية والأمان/الشبكة
+
+## 3. Architecture (critical — security & network)
+
+> **عربي:** ليه المتصفح مش بيتصل بالـ SQL لوحده
+
+### 3.1 Why not “browser talks TDS/Postgres directly”
+
+Browsers cannot safely open raw SQL Server/Postgres sockets to private servers. Customer DBs are almost always on **LAN / VPN / allowlisted IPs** — not public internet. A cloud-only proxy that holds customer SQL passwords is a **high-risk** design and often blocked by firewalls.
+
+> **عربي:** قرار: الكونكت الحي على الديسكتوب أولًا
+
+### 3.2 Phased decision (LOCKED for planning)
+
+| Phase | Where live SQL connect runs | Same features? |
+|-------|----------------------------|----------------|
+| **Phase 1 (primary)** | **Desktop only** (Tauri + sidecar connector on LAN/VPN) | Full: connect, catalog, run SQL, schema-aware chat |
+| **Phase 1 web role** | Web = **same Support UI + chat history** (Firestore); Connect button uses **desktop bridge / “Open in Desktop”** when user is browser-only | UX parity for chat/history/profiles metadata — **not** raw sockets from the browser |
+| **Later (Phase 2+)** | Optional **browser-only live connect** via on-prem **Vigil DB Gateway** (customer VPC) or approved tunnel | Aim for feature parity with desktop connector API |
+
+**Answer in product terms:**  
+- نعم، الشغل **الأساسي للـ Connect الحي** = **الديسكتوب**.  
+- الويب يبقى فيه نفس وضع Support والشاتس والبروفايلات، ويتصل **من خلال** الديسكتوب (embed/bridge) في المرحلة الأولى.  
+- **كونكت كامل من المتصفح لوحده بنفس الفيتشز** = **لاحقاً** (مش Phase 1)، عشان الفايروول والأمان.
+
+```text
+┌─────────────────────────────┐
+│ Vigil Web (User shell)      │  Chat UI, Support mode, history (Firestore)
+│  - Connection profiles UX   │  Metadata only in cloud (optional)
+│  - Schema tree (via bridge) │  Live tree only when Desktop/Gateway connected
+└──────────────┬──────────────┘
+               │ auth + UI (+ optional embed)
+┌──────────────▼──────────────┐
+│ Vigil Desktop / local       │  ★ LIVE CONNECTOR — Phase 1 primary
+│ connector (Tauri sidecar)   │  - User enters server, db, user, password
+│  - SQL Server (tedious/mssql)│  - Credentials in OS keychain / local vault
+│  - PostgreSQL (pg)          │  - Introspect + execute on LAN/VPN
+└──────────────┬──────────────┘
+               │ results / schema snapshots (bounded)
+               ▼
+         Agent context (no full DB dump to Firestore)
+```
+
+- [x] **Phase 1:** Desktop owns the live connection.  
+- [x] **Phase 1 web:** same Support shell; browser-alone → **Open in Vigil Desktop to connect** (or embed already running on desktop).  
+- [ ] **Later:** on-prem **Vigil DB Gateway** for true browser-only teams — same connector API; still no raw passwords in Firestore.  
+- [ ] **Never** put SQL passwords in Firestore plaintext.  
+- [ ] Optional cloud fields: connection **display name**, host nickname, engine type, last-used — **not** secrets.  
+- [ ] Schema snapshots sent to the model must be **bounded** (selected DB/schema, top-N objects, summaries) — never “upload whole production DB.”  
+- [ ] Query **result grids** stay local/session by default; user may pin a small excerpt into chat deliberately.
+
+---
+
+> **عربي:** واجهة الاتصال
+
+## 4. Connection UX (what you described)
+
+> **عربي:** قسم — 4.1 Login / Connect screen
+
+### 4.1 Login / Connect screen
+
+- [ ] Engine picker: **SQL Server** | **PostgreSQL** (extensible later: MySQL, Oracle…)  
+- [ ] Fields: Host / IP, Port (1433 / 5432 defaults), Instance (SQL Server), Database (optional at connect), Username, Password, Encrypt/TrustServerCertificate toggles, SSL mode (Postgres)  
+- [ ] Optional: named **Connection profile** (“Prod support read-only”, “UAT”)  
+- [ ] Test connection → success/fail with clear Arabic/English errors  
+- [ ] On success: session connected; sidebar shows server → databases
+
+> **عربي:** قسم — 4.2 After connect — catalog browser
+
+### 4.2 After connect — catalog browser
+
+- [ ] List databases (permission-filtered)  
+- [ ] Expand: schemas, tables, views, columns (name/type/nullable/PK/FK), indexes  
+- [ ] SQL Server: stored procedures, functions, synonyms, jobs (later)  
+- [ ] PostgreSQL: functions, materialized views, extensions (later)  
+- [ ] Search objects by name  
+- [ ] “Add to chat context” on table/view/proc (structured mention, like `@table`)
+
+> **عربي:** أوضاع الأمان
+
+### 4.3 Safety modes
+
+- [ ] Default **Read-only** session (SELECT / VIEW DEFINITION only) for support  
+- [ ] Explicit **Write mode** toggle (INSERT/UPDATE/DELETE/DDL) with confirm + optional approval policy  
+- [ ] Destructive statement detection (`DROP`, `TRUNCATE`, `ALTER`, `DELETE` without WHERE) → hard confirm  
+- [ ] Row limits / timeout / cancel running query  
+- [ ] Audit log locally (+ optional Admin usage event: “ran query”, not full SQL text unless user opts in)
+
+---
+
+> **عربي:** قدرات SQL Server
+
+## 5. What we can do — SQL Server
+
+| Capability | Phase | Notes |
+|------------|-------|--------|
+| Connect with user credentials (SQL auth / later Windows/Azure AD) | 1 | SQL auth first |
+| List DBs, tables, views, columns, FKs | 1 | `INFORMATION_SCHEMA` / catalog views |
+| Script object DDL (proc/view/table) into editor | 1 | Ground AI + human |
+| AI: generate / explain / fix T-SQL from live schema | 1 | Mentions `@db` `@table` |
+| Run SELECT; grid results; export CSV | 1 | Read-only default |
+| Explain / estimated plan (optional) | 1.5 | `SET SHOWPLAN` / actual plan later |
+| Edit & deploy stored proc with diff + confirm | 1.5 | Write mode |
+| **SQL Activity Capture (“Vigil Profiler”)** | **1.5 — critical for support** | See §5.1 — replace daily SQL Profiler ritual |
+| Live sessions / blocking / waits | 1.5–2 | DMVs — pairs with Activity Capture |
+| Agent jobs / SSRS light links | later | |
+| Crystal Reports assist | later | See §7 |
+
+**Stack hint (desktop connector):** Node `mssql` / `tedious`, or Rust crate via Tauri — decide at implement time.
+
+> **عربي:** التقاط SQL (بديل البروفايلر) — مهم
+
+### 5.1 SQL Activity Capture — “Vigil Profiler” (CRITICAL for support)
+
+**Problem today:** To know which SQL runs when the desktop EXE opens a report or a button is clicked, support opens **SQL Server Profiler** (or traces), hunts **SPIDs / filters / Application Name**, clicks in the app, then digs the batch out. Slow, error-prone, tool-outside-Vigil.
+
+**Product answer:** Yes — using the **same SQL connection** Vigil already has (plus permissions). We do **not** embed the old Profiler UI. We implement a **Support-friendly Activity Capture** panel powered by modern SQL Server observability:
+
+| Technique | Role | Needs |
+|-----------|------|--------|
+| **DMVs (live)** | What’s running *right now*: `sys.dm_exec_requests` + `sys.dm_exec_sql_text` + `sys.dm_exec_connections` / sessions | `VIEW SERVER STATE` (or equivalent) |
+| **DMVs (recent)** | What just finished (plan cache): `sys.dm_exec_query_stats` + sql_text — good for short bursts | Same |
+| **Extended Events (preferred capture)** | Time-boxed ring buffer / file target: `sql_batch_completed`, `rpc_completed`, `sql_statement_completed` filtered by login / host / app_name / database / spid | CREATE EVENT SESSION (or use a pre-deployed Vigil session template) |
+| **Query Store** (if on) | Historical regressions per DB — complement, not click-sync | Query Store enabled |
+| **Legacy Profiler traces** | Avoid as default (deprecated); only if customer mandates | — |
+
+**Not required:** User manually opening Profiler, copying SPID into a form as the happy path.
+
+#### Support UX (make it addictive)
+
+- [ ] Panel: **Activity / Profiler** under Support / DB  
+- [ ] Modes:
+  - **Watch live** — poll DMVs every N ms; show running requests (spid, login, host, app, db, wait, elapsed, sql text preview)
+  - **Capture window** — Start → user clicks in EXE / opens report → Stop → list batches/RPCs captured (duration, reads, cpu, text)
+  - **Filter presets:** my login, this host, Application Name contains `…`, database = X, exclude Vigil’s own spid  
+- [ ] One-click **“Capture next click”** when Desktop EXE Runtime is attached: Start XEvents/DMV window → optional `app_click` / user clicks → Stop → show SQL tied to that action  
+- [ ] Click a captured statement → full text editor, **Explain**, “Add to ticket”, “Open related objects” (parse proc names)  
+- [ ] AI: «الجملة دي بطيئة ليه؟» / «منين التقرير بيجيب البيانات؟» grounded in captured text + schema  
+- [ ] Arabic labels: «بدء الالتقاط» / «إيقاف» / «الجمل أثناء فتح التقرير»
+
+#### Correlate with Desktop EXE (killer combo)
+
+```text
+User: "افتح تقرير المبيعات وورّيني جملة السيكوال"
+  → optional app_* navigate / user opens report
+  → Activity Capture window (2–15s)
+  → show top SQL by duration / by time order
+  → pin into chat + ticket evidence
+```
+
+See `05-اختبار-برامج-EXE-ويندوز.mdc` §13.1 — keep both specs in sync.
+
+#### Filters that replace “خذ رقم الـ session”
+
+- [ ] Auto-detect **Application Name** from EXE connection string / config-beside-EXE (consent) when possible  
+- [ ] Filter by **HostName** = support machine  
+- [ ] Filter by **Login** used by the ERP  
+- [ ] Optional: user pastes SPID only as power escape hatch — not the default tutorial  
+
+#### Safety & permissions
+
+- [ ] Capture is **observability**, still on the Support connection — document required grants  
+- [ ] Default: **do not** capture forever; max duration + row cap (e.g. 30s / 200 events)  
+- [ ] Exclude Vigil’s own diagnostic queries from the list (filter by program_name = Vigil)  
+- [ ] Captured SQL may contain PII — local/session default; pin deliberately to ticket  
+- [ ] Creating XEvent sessions may need DBA one-time setup: ship **script template** “grant + create VigilSupportCapture” for admins  
+- [ ] Read-only support users: DMV watch may work with VIEW SERVER STATE; XEvent create may need DBA — degrade gracefully to DMV-only mode with clear message  
+
+#### Implementation sketch (when executing)
+
+- [ ] Tools: `sql_activity_live`, `sql_capture_start`, `sql_capture_stop`, `sql_capture_list`  
+- [ ] Prefer XEvents ring_buffer for short captures; fall back to DMV sampling loop  
+- [ ] Parse `rpc_completed` object_name + statement for procs Crystal/EXE love  
+
+---
+
+> **عربي:** قدرات PostgreSQL
+
+## 6. What we can do — PostgreSQL
+
+| Capability | Phase | Notes |
+|------------|-------|--------|
+| Connect (user/password, SSL modes) | 1 | |
+| List DBs, schemas, tables, views, columns, FKs | 1 | `information_schema` / `pg_catalog` |
+| Script view/function/table DDL | 1 | |
+| AI: generate / explain / fix SQL from live schema | 1 | |
+| Run SELECT; grid; CSV | 1 | |
+| `EXPLAIN` / `EXPLAIN ANALYZE` (gated) | 1.5 | ANALYZE = write-ish load — confirm |
+| **Activity capture (pg_stat_activity + optional auto_explain)** | 1.5 | Postgres analogue of §5.1 — no SQL Profiler equivalent; same UX idea |
+| Migrate/assist between SQL Server ↔ Postgres dialect | 2 | Huge support win for dual-stack shops |
+| Extensions / RLS awareness | later | |
+
+**Stack hint:** `pg` / `postgres.js` in sidecar, or Rust `tokio-postgres`.
+
+**Postgres capture notes:** `pg_stat_activity` for live; `pg_stat_statements` (if extension) for recent; short sampling during “Capture window.” Same Start/Stop UX as SQL Server so support learns one habit.
+
+---
+
+> **عربي:** مؤلف تيكتات الدعم
+
+## 7. Support Ticket Composer → Developers (CRITICAL)
+
+After Support (or PM) finishes studying an issue inside Vigil, they must leave with a **ready, professional ticket for the programming team** — without burning mental energy rewriting the story.
+
+> **عربي:** قسم — 7.1 Dedicated Support Tickets area (first-class UI)
+
+### 7.1 Dedicated Support Tickets area (first-class UI)
+
+Not a buried chat export — a **dedicated Support Tickets** module in the shell (web + desktop embed):
+
+- [ ] Sidebar: **Tickets** (under Support) — drafts, ready-to-publish, published  
+- [ ] Composer panel: structured ticket preview the engineer can edit before send  
+- [ ] Engineer steers in natural language (“طلّعلي تيكت باج للمبرمجين عن تقرير المبيعات”) → Vigil drafts the ticket  
+- [ ] One-click **Copy**, **Save draft** (Firestore), **Publish to Azure DevOps** (primary)
+
+> **عربي:** قسم — 7.2 Ticket quality bar (what “محترمة” means)
+
+### 7.2 Ticket quality bar (what “محترمة” means)
+
+Vigil proposes a strong default template (AR/EN); engineer tweaks; then publish:
+
+| Block | Purpose |
+|-------|---------|
+| **Title** | Short, searchable, developer-facing |
+| **Type** | Bug / Task / User Story / Spike (maps to ADO work item type) |
+| **Summary** | 2–4 sentences: what’s broken / needed |
+| **Business / user impact** | Who feels it, severity |
+| **Environment** | DB engine, server nickname, app module, customer (no secrets) |
+| **Steps to reproduce** | Numbered |
+| **Expected vs actual** | Clear contrast |
+| **Evidence** | Queries run (sanitized), error text, object names (`dbo.X`), screenshots links if any |
+| **Suspected area** | Tables/procs/reports touched — from live DB session when available |
+| **Acceptance criteria** | Bullets developers can check off |
+| **Out of scope / notes** | Optional |
+| **Priority / Severity** | P0–P3 + Sev |
+
+- [ ] AI fills from **current Support chat + DB context** so the engineer doesn’t re-type the investigation  
+- [ ] Engineer can say “اختصر” / “زود تفاصيل للـ DBA” / “خليها Task مش Bug” and regenerate sections  
+- [ ] Output is scannable **bullets + short paragraphs** — not a wall of chat dump
+
+> **عربي:** قسم — 7.3 Azure DevOps — primary publish target (APIs: YES)
+
+### 7.3 Azure DevOps — primary publish target (APIs: YES)
+
+**Answer:** Azure DevOps exposes a full **Work Item Tracking REST API**. You do **not** have to only create tickets by clicking in their website. Vigil can create work items from outside after the support engineer authorizes their account.
+
+- Create: `POST https://dev.azure.com/{org}/{project}/_apis/wit/workitems/${type}?api-version=7.2`  
+  Body: JSON Patch fields (`System.Title`, `System.Description`, `Microsoft.VSTS.TCM.ReproSteps`, tags, Area Path, Iteration, Assigned To, …)  
+- ADO assigns the **next work item ID** automatically on create — Vigil shows `#1234` + deep link back.  
+- Auth options:
+  - **Preferred for product:** **Microsoft Entra ID OAuth** per user (each support engineer signs in with their ADO/Entra account — “extension-like” connect once). Legacy Azure DevOps OAuth is deprecated for new apps (2025+); use Entra.  
+  - **Fallback / enterprise:** Personal Access Token (PAT) stored in OS keychain — simpler but orgs increasingly restrict PATs.  
+- Permissions: user’s own ADO identity creates the item (audit trail = that engineer), subject to project permissions.
+
+**Vigil UX for ADO link**
+- [ ] Settings → **Integrations → Azure DevOps**: Connect account (Entra OAuth)  
+- [ ] Choose default **Organization**, **Project**, default work item type (Bug/Task), Area Path  
+- [ ] Per-ticket override before publish  
+- [ ] On success: save `adoWorkItemId`, URL, title on the Vigil ticket draft; status → `published`  
+- [ ] Optional: attach truncated evidence as Discussion comment via API  
+
+**Not required:** embedding the full Azure DevOps website as the only create path (may still deep-link to open the item after publish).
+
+> **عربي:** قسم — 7.4 Other platforms (later / adapters)
+
+### 7.4 Other platforms (later / adapters)
+
+Same Ticket Composer → pluggable publishers:
+
+| Platform | Priority | Notes |
+|----------|----------|--------|
+| **Azure DevOps** | **P0 — primary** | Work Items REST API |
+| GitHub Issues | P2 | If repo-centric teams |
+| Jira Cloud | P2 | REST + OAuth |
+| Linear / others | later | |
+
+Composer stays Vigil-owned; only the **publish adapter** changes.
+
+> **عربي:** ربط Crystal Reports بالداتابيز
+
+### 7.5 Crystal Reports ↔ Database linkage (high addiction value)
+
+Full Crystal designer is **out of scope**. Vigil becomes the **daily companion** around reports + SQL:
+
+- [ ] **Report binder:** register a report (name, `.rpt` path or export of Command/SQL, parameters list, module/customer) linked to a connection profile + suspected tables/views  
+- [ ] **“لي التقرير غلط؟” wizard:** pick report → Vigil runs/adapts its SQL (or user-pasted Command) on live DB → compares row counts / null keys / date filters vs parameters  
+- [ ] **Column mismatch detector:** report fields vs live result columns / aliases — highlight missing or renamed fields (classic Crystal break)  
+- [ ] **Parameter playground:** set `@FromDate`, `@Branch`, … once; re-run dataset; pin “golden” vs “broken” result samples into chat/ticket  
+- [ ] **Explain totals:** “المجموع في التقرير غير دفتر الأستاذ” → AI proposes join/filter checks against live schema  
+- [ ] **Report catalog (team Library):** searchable list of company reports + last known-good SQL + owner — tribal knowledge that usually lives in WhatsApp  
+- [ ] **Ticket from report:** one click → Ticket Composer prefilled with report name, params, SQL, mismatch notes  
+- [ ] Optional later: parse `.rpt` metadata where feasible; until then accept SQL/Command paste + field list
+
+> **عربي:** تسهيلات يومية للدعم
+
+### 7.6 Daily efficiency kits (Support) — make it habit-forming
+
+Product goal: **light, fast, Arabic-friendly, one place for the whole morning.**
+
+**Speed & comfort**
+- [ ] One-click **favorite connections** (UAT / Prod-read) with last DB remembered  
+- [ ] **Query history** + ★ favorites + team shared snippets (Library)  
+- [ ] Auto `TOP (100)` / `LIMIT` wrapper in read-only (toggleable) — never fear prod  
+- [ ] **Diff two environments:** same query on UAT vs Prod (two profiles) — side-by-side counts/schema drift  
+- [ ] **Schema search** “فين عمود رقم الفاتورة؟” across DBs  
+- [ ] **Business glossary:** Arabic term → table.column (team-editable) so juniors don’t ask seniors every time  
+- [ ] **Playbooks / runbooks:** canned flows (“تقرير فاضي”, “تكرار صفوف”, “بطء بروسيجر”) → guided steps + suggested SQL  
+- [ ] **Evidence pack:** zip/export of queries + truncated grids + ticket draft for handoff  
+- [ ] **Handoff to colleague:** share Support chat + binder + draft ticket inside Vigil (same account org later)
+
+**SQL craft (without becoming SSMS)**
+- [ ] Format / explain / “simplify this proc” grounded in live DDL  
+- [ ] “Generate report dataset SQL” from plain Arabic requirement + live tables  
+- [ ] Soft **index / slow query** hints (EXPLAIN / showplan) — opt-in  
+- [ ] Safe **temp probes** (`SELECT INTO #` patterns) suggestions — never auto-run writes
+
+**Delight UX principles (non-negotiable for addiction)**
+- [ ] First successful connect & first useful grid in **&lt; 60 seconds** for a returning user  
+- [ ] Empty states teach one next action only (“وصل UAT” / “افتح تقرير المبيعات”)  
+- [ ] AR-first copy for Support mode; short sentences; big primary buttons  
+- [ ] No cluttered IDE chrome — Support mode feels like a **calm workbench**, not VS Code  
+- [ ] Celebrate publish: show ADO `#id` + confetti-light feedback (subtle)
+
+---
+
+> **عربي:** مساحة مدير المشروعات
+
+## 7A. Project Manager workspace (efficiency layer)
+
+PMs rarely need raw SQL; they need **clarity, status, and handoffs** tied to the same Vigil + ADO world.
+
+- [ ] **PM home:** projects (Vigil cloud projects) linked optionally to ADO project  
+- [ ] **Status digest:** “إيه المتأخر؟” from published tickets + Plans + Schedule — Arabic executive summary  
+- [ ] **Meeting → actions:** paste notes → extract action items → draft ADO Tasks / Vigil tickets  
+- [ ] **Risk board:** stalled tickets, missing assignees, severity without owner  
+- [ ] **Client update generator:** non-technical Arabic paragraph from selected tickets (no internal SQL dumps)  
+- [ ] **Sprint / iteration snapshot** via ADO API (read): counts by state — not a full Azure Boards clone  
+- [ ] **Bridge to Support:** PM opens a ticket Vigil already filed; asks “وضعها إيه؟” with live ADO fields  
+- [ ] **Bridge to Devs:** attach Plan Mode plan link + ticket ids for a release  
+- [ ] Light UX: same calm shell; PM never sees connection passwords or raw grids unless they switch to Support
+
+Package flags: `feature.pmWorkspace` (Admin).
+
+---
+
+> **عربي:** سلوك الوكيل
+
+## 8. AI / agent behavior (Support mode)
+
+When Support / DB workspace is active:
+- [ ] System prompt: prefer catalog tools over guessing table names  
+- [ ] Tools (conceptual): `list_databases`, `list_tables`, `describe_table`, `get_object_ddl`, `run_sql` (gated), `explain_sql`, **`draft_support_ticket`**, **`publish_ticket_ado`**  
+- [ ] Plan Mode can produce **DB change plans** (procs/migrations) → Approve → Execute via connector write mode  
+- [ ] Same wallet metering as code chat (`surface: support-db` / `support-ticket`)  
+- [ ] Arabic + English first-class for support teams  
+
+**Beat Cursor:** live schema grounding + in-app execute + **handoff tickets developers actually want** — not paste-DDL + vague chat.
+
+---
+
+> **عربي:** سحابة ضد محلي
+
+## 9. Firestore vs local (data boundary)
+
+| May live in Firestore | Must stay local / connector |
+|-----------------------|-----------------------------|
+| Chat about the incident | Passwords, connection strings with secrets |
+| Plan steps (no secret connection strings) | Live result sets (default) |
+| Connection profile **labels** (host nickname, engine) | Full schema dumps |
+| **Support ticket drafts** + published ADO id/URL | ADO OAuth tokens / PATs (keychain only) |
+| Usage events | Production row data unless user pins a small sample |
+
+Aligns with cloud bridge: **never upload private data warehouses** wholesale.
+
+---
+
+> **عربي:** عناصر السايدبار
+
+## 10. Web shell IA additions
+
+In `03-عقد-مشروع-الويب.mdc` sidebar (Support-capable accounts / packages):
+- [ ] **Support** or **DB Copilot** entry  
+- [ ] **Connections** (profiles metadata; “Connect” opens desktop if needed)  
+- [ ] **Tickets** — Support Ticket Composer + drafts/published (CRITICAL)  
+- [ ] Recents: support chats tagged by connection nickname  
+- [ ] Settings → Integrations → Azure DevOps connect  
+- [ ] **Reports** catalog / binders (Crystal ↔ SQL)  
+- [ ] **Activity / Profiler** — live + capture window (§5.1)  
+- [ ] **PM** home (when entitled)  
+- [ ] Package entitlement flags: `feature.supportDb`, `feature.supportTickets`, `feature.reportBinder`, `feature.sqlActivity`, `feature.pmWorkspace` (Admin-controllable)
+
+---
+
+> **عربي:** نطاق المرحلة 1
+
+## 11. Phase 1 scope (DB Copilot)
+
+**In**
+- [ ] Desktop connector: SQL Server + PostgreSQL connect + catalog browser  
+- [ ] Read-only default + run SELECT with limits  
+- [ ] Chat grounded via describe/list/ddl tools  
+- [ ] Web: Support mode shell + deep link; live connect via desktop/embed bridge  
+- [ ] Credential storage in OS keychain / local vault  
+- [ ] **Support Ticket Composer** (structured template + AI draft from session)  
+- [ ] **Azure DevOps publish** via REST (Entra OAuth or PAT) → return work item id + link  
+
+**Phase 1.5 (right after core connect — high support value)**  
+- [ ] **SQL Activity Capture** DMV live + short capture window (SQL Server; Postgres pg_stat_*)  
+- [ ] Filters by login/host/app; exclude Vigil spid  
+- [ ] Optional sync with Desktop EXE “capture while I click”  
+
+**Out of Phase 1**
+- [ ] **Full browser-only live SQL connect** (no desktop) — deferred to Gateway phase  
+- [ ] Cloud-hosted proxy to arbitrary customer SQL on the public internet  
+- [ ] Full Crystal Reports designer  
+- [ ] Windows Auth / Azure AD for **SQL** (can follow quickly after SQL auth) — note: Entra for **ADO** login is in scope  
+- [ ] Jira / GitHub Issues adapters (after ADO)  
+- [ ] MySQL/Oracle  
+- [ ] Unattended write/DDL without confirms  
+
+---
+
+> **عربي:** ترتيب البناء المقترح
+
+## 12. Suggested build order
+
+1. Connection model + keychain + Test Connection (SQL Server)  
+2. Catalog browser + `describe_table` / DDL  
+3. SQL editor + results grid + read-only gate  
+4. Wire agent tools + Support mode system prompt  
+5. PostgreSQL parity  
+6. Web Support shell + desktop bridge (“Connect locally”)  
+7. **Ticket Composer** + template + AI draft from chat/DB context  
+8. **Azure DevOps** OAuth/PAT + create work item + deep link  
+9. Write mode + Plan Mode for DB changes  
+10. Report binder + “broken report” wizard + team report catalog  
+11. **SQL Activity Capture (Vigil Profiler)** + EXE click correlate  
+12. Support delight kits: favorites, history, glossary, playbooks, env diff  
+13. PM workspace digests + meeting→actions + ADO read snapshot  
+14. Jira/GitHub adapters + deeper Crystal metadata + dialect translation  
+
+---
+
+> **عربي:** معايير القبول — امتى نخلص؟
+
+## 13. Acceptance criteria
+
+- [ ] Support engineer can enter SQL Server host/user/password, connect, see databases/tables/views  
+- [ ] Ask in Arabic/English “ليه التقرير بيكسر على جدول X؟” and get an answer using **live** columns — without pasting schema by hand  
+- [ ] Same for PostgreSQL  
+- [ ] Support can **Start/Stop capture** around opening a report or an EXE click and see the SQL text **without SQL Profiler**  
+- [ ] After investigation, engineer asks for a ticket → gets a **structured, editable** draft with repro + acceptance criteria  
+- [ ] With ADO connected, **Publish** creates a work item via API and returns `#id` + URL (no mandatory manual form on ado.microsoft.com)  
+- [ ] Dedicated **Tickets** area lists drafts/published  
+- [ ] Read-only blocks `DROP` without explicit write mode + confirm  
+- [ ] SQL secrets + ADO tokens not stored in Firestore  
+- [ ] Usage meters on the same account wallet  
+- [ ] Cursor-style paste loop is no longer required for the happy path  
+
+---
+
+> **عربي:** قرارات لسه مفتوحة
+
+## 14. Open decisions
+
+- [ ] Connector language: Node sidecar vs Rust/Tauri plugin  
+- [ ] Windows Authentication / Azure AD priority after SQL auth  
+- [ ] Whether schema **summaries** may sync to Firestore for phone follow-up (default: no; chat text only)  
+- [ ] Multi-connection in one chat vs one active connection  
+- [ ] Package SKU: Support-DB included in Pro vs add-on  
+- [ ] Default ADO work item type + field mapping per org (Bug vs Task; custom fields)  
+- [ ] Entra OAuth app registration ownership (Vigil SaaS app vs customer-tenant app)  
+
+---
+
+> **عربي:** صندوق الأفكار
+
+## 15. Ideas inbox
+
+- 2026-11-11: Support persona + SQL Server/Postgres live connect as Cursor-beating differentiator; desktop connector default; web UX continuum; Crystal/report assist later; kill copy-paste support loop.  
+- 2026-11-11: **Locked:** live Connect = Desktop Phase 1; Web = same Support UX + history, connect via desktop bridge; full web-only connect = later (DB Gateway).  
+- 2026-11-11: **Support Ticket Composer** (dedicated UI) → high-quality developer handoff; **Azure DevOps REST create work item** primary (Entra OAuth per engineer); Jira/GitHub later.  
+- 2026-11-11: **Delight layer** — Crystal↔SQL report binder/wizard, glossary, playbooks, env diff, query favorites; **PM workspace** digests/meeting→ADO/client updates — habit-forming calm UX.  
+- 2026-11-11: **Vigil Profiler / SQL Activity Capture** — DMVs + Extended Events (not classic Profiler UI); capture-on-EXE-click; filters replace SPID ritual; Postgres pg_stat_* analogue.  
+- 
+
+---
+
+> **عربي:** حاجات مش في النطاق / خطوط حمراء
+
+## 16. Non-goals / guardrails
+
+- Not turning Vigil Web into a public SQL proxy for the internet  
+- Not replacing SSMS/pgAdmin for every DBA power feature in v1  
+- Not uploading production databases to Firebase  
+- Not auto-running destructive SQL in Support mode  

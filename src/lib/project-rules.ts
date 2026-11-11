@@ -3,7 +3,7 @@
  * Lives in the workspace only — never synced to Firestore.
  */
 
-import { createDir, readTextFile, writeTextFile } from "./workspace-fs";
+import { createDir, listDir, readTextFile, writeTextFile } from "./workspace-fs";
 
 export const PROJECT_RULES_DIR = ".vigil";
 export const PROJECT_RULES_FILE = "rules.md";
@@ -55,6 +55,47 @@ export async function readProjectRules(workspaceRoot: string): Promise<string> {
   }
 }
 
+/**
+ * Layered local rules: `.vigil/rules.md`, `AGENTS.md`, and `.vigil/rules/*.md`.
+ * Stays on-disk only — never uploaded.
+ */
+export async function readAllProjectRules(
+  workspaceRoot: string,
+): Promise<string> {
+  const root = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  const chunks: string[] = [];
+
+  const main = await readProjectRules(root);
+  if (main) chunks.push(`### ${PROJECT_RULES_REL}\n${main}`);
+
+  try {
+    const agents = (await readTextFile(`${root}/AGENTS.md`)).trim();
+    if (agents) chunks.push(`### AGENTS.md\n${agents}`);
+  } catch {
+    /* optional */
+  }
+
+  try {
+    const entries = await listDir(`${root}/${PROJECT_RULES_DIR}/rules`);
+    const files = entries
+      .filter((e) => !e.isDir && /\.(md|txt)$/i.test(e.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const file of files) {
+      try {
+        const body = (await readTextFile(file.path)).trim();
+        if (!body) continue;
+        chunks.push(`### .vigil/rules/${file.name}\n${body}`);
+      } catch {
+        /* skip unreadable */
+      }
+    }
+  } catch {
+    /* optional rules dir */
+  }
+
+  return chunks.join("\n\n").trim();
+}
+
 /** Drop leftover VS Code / Cursor tips that block Vigil Browser tool use. */
 function sanitizeBrowserRules(text: string): string {
   return text
@@ -81,10 +122,16 @@ export function formatProjectRulesForAgent(raw: string): string {
   if (!original) return "";
   // Exact stock file (before sanitize) — nothing custom to inject.
   if (original === PROJECT_RULES_TEMPLATE.trim()) return "";
+  // Layered dump that is only the untouched template section.
+  if (
+    original === `### ${PROJECT_RULES_REL}\n${PROJECT_RULES_TEMPLATE.trim()}`
+  ) {
+    return "";
+  }
   const text = sanitizeBrowserRules(original);
   if (!text) return "";
   return (
-    `Project rules (from ${PROJECT_RULES_REL} — follow these for this workspace):\n` +
+    `Project rules (local .vigil / AGENTS.md — follow these for this workspace):\n` +
     text +
     "\n\n(Override: open previews with the browser_open tool / Vigil Browser — never Command Palette.)"
   );

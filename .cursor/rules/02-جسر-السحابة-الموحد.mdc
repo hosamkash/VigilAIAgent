@@ -1,0 +1,340 @@
+---
+description: "02 جسر السحابة الموحّد (Firestore أولًا)"
+alwaysApply: true
+---
+
+<!-- ===== فهرس عربي / اقرأني أول ===== -->
+**أولوية التنفيذ: 02** — جسر السحابة الموحّد (Firestore أولًا)
+
+> **بالعربي (الغرض):** حساب واحد وهيستوري واحد؛ اللوكال اختياري؛ تنفيذ الخطط محليًا.
+
+> **ملاحظة:** التفاصيل بالإنجليزي زي ما هي. سطر «عربي» فوق كل عنوان = ترجمة سريعة وأنت بتلف.
+
+**فهرس سريع:**
+- مبدأ البيانات (سحابة أولًا)
+- الواقع الحالي مقابل الفكرة
+- قصة المنتج للمستخدم
+- قسم — 3. Architecture (Firestore-first)
+- سطح الويب
+- لوجن وتضمين الديسكتوب
+- محور Firestore
+- سلوكيات الاستمرارية بين المنصات
+- نطاق المرحلة 1
+- ترتيب البناء عند بدء التنفيذ
+- معايير القبول — امتى نخلص؟
+- قرارات لسه مفتوحة
+- صندوق الأفكار
+- حاجات مش في النطاق / خطوط حمراء
+
+**ترتيب الملفات:** `00` عامة → `01` Plan Mode → `02` جسر سحابة → `03` ويب → `04` دعم/SQL → `05` EXE → `06` أمان
+<!-- ===== نهاية الفهرس العربي ===== -->
+
+# Vigil Unified Cloud Bridge — Focus Spec (Phase 1+)
+
+**Status:** SPEC / PLANNING ONLY — no implementation until the user starts execution.  
+**Goal:** One Vigil identity & conversation continuum: discuss anywhere (web) → save Plan → open desktop → **Execute** with full history — without re-explaining. Beat Cursor’s “desktop-only / re-brief the agent” pain.  
+**Related:** `.cursor/rules/00-الخطة-العامة-والأولويات.mdc`, `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc`  
+**Web project contract (portable):** `.cursor/rules/03-عقد-مشروع-الويب.mdc` — copy into the separate Vigil Web repo when that work starts.  
+**Support / DB Copilot:** `.cursor/rules/04-دعم-فني-وقواعد-البيانات.mdc` — SQL Server + Postgres for support personas (desktop connector; web UX).  
+**Hard constraint:** **Never upload project source trees / workspace files to Firestore.** Cloud holds account, billing, chats, plans, usage. Desktop tools touch the local repo only.
+
+---
+
+> **عربي:** مبدأ البيانات (سحابة أولًا)
+
+## 0. Data principle (UPDATED — product decision)
+
+> **عربي:** قسم — Primary (the base)
+
+### Primary (the base)
+- [x] **Firebase Auth + Firestore is the system of record** for account, subscriptions, wallets, usage, **chats, messages, and plans**.  
+- [x] Product is designed **cloud / online first**. Web and desktop both read/write the same Firestore hub under the same login.  
+- [x] Same account history on phone web ≡ desktop (including when desktop hosts the web UI).
+
+> **عربي:** قسم — Optional (not the base)
+
+### Optional (not the base)
+- [ ] **Local DB (VigilDB / SQLite / on-disk cache) is OPTIONAL** — for offline cache, performance, or air-gapped preference — **not** the primary source of truth.  
+- [ ] If local cache exists: it **mirrors** Firestore; conflicts resolve toward cloud when online.  
+- [ ] User/settings may offer “prefer offline cache” later; default product path remains **online Firestore**.
+
+> **عربي:** قسم — Still local-only (never cloud)
+
+### Still local-only (never cloud)
+- Workspace source code, git objects, deep code index blobs, OS keychain secrets (unless a future BYOK vault is explicitly designed).
+
+---
+
+> **عربي:** الواقع الحالي مقابل الفكرة
+
+## 1. Reality check — what exists today vs this idea
+
+> **عربي:** قسم — In VigilAIAgent (desktop) today
+
+### In VigilAIAgent (desktop) today
+- [x] Local chat / VigilDB / local usage logs (**today’s interim**; will become optional cache under this vision)  
+- [x] Local agent + tools (sidecar) for repo work  
+- [x] Mid-turn `manage_plan` (not full Plan Mode yet)  
+- [ ] **No** Firebase/Firestore as chat SoR  
+- [ ] **No** web Admin / User SaaS dashboards in this repo  
+- [ ] **No** ChatGPT-like cloud sidebar UX  
+- [ ] **No** embedded Vigil Web host/iframe inside desktop  
+
+> **عربي:** قسم — Reference
+
+### Reference
+- [~] Preliminary web UI (user-mentioned) — inventory at implement time  
+- [~] VigilHub Firebase/admin patterns — reference only  
+
+> **عربي:** قسم — Cursor
+
+### Cursor
+- Weak on true web↔desktop continuum with one wallet + one history + execute-on-desktop. Vigil differentiator.
+
+**Phase 1 of this idea: NOT built yet.**
+
+---
+
+> **عربي:** قصة المنتج للمستخدم
+
+## 2. Product story
+
+1. Away from desk → **Vigil Web** (online).  
+2. Rich user shell (sidebar like ChatGPT / Meta AI): New Chat, Projects, Library, Search, recent chats, Plans, usage…  
+3. Chat + Plan stored in **Firestore** (account-scoped).  
+4. Home → **Vigil Desktop** (same login).  
+5. History is the **same carbon copy** (from Firestore).  
+6. Prefer showing that history via **hosted / iframe Vigil Web inside desktop** so UX matches web 1:1.  
+7. User: execute the plan → desktop agent runs **local** tools on the open workspace.  
+8. Plan/execution status writes back to Firestore.
+
+---
+
+> **عربي:** قسم — 3. Architecture (Firestore-first)
+
+## 3. Architecture (Firestore-first)
+
+```text
+                 ┌──────────────────────────────────┐
+                 │  PRIMARY: Firebase Auth +        │
+                 │  Firestore (always the SoR)      │
+                 │  users, packages, wallets,       │
+                 │  chats, messages, plans, usage   │
+                 └────────────────┬─────────────────┘
+                                  │ online
+          ┌───────────────────────┼───────────────────────┐
+          ▼                       ▼                       ▼
+   ┌─────────────┐         ┌─────────────┐         ┌──────────────────┐
+   │ Vigil Web   │         │ Desktop     │         │ OPTIONAL local   │
+   │ User+Admin  │         │ Web host /  │         │ cache (VigilDB)  │
+   │ ChatGPT-like│         │ iframe of   │         │ mirror only      │
+   │ sidebar UX  │         │ same Web +  │         └──────────────────┘
+   └─────────────┘         │ local agent │
+                           │ tools/LSP   │
+                           └─────────────┘
+```
+
+---
+
+> **عربي:** سطح الويب
+
+## 4. Web surface
+
+**Canonical web checklist & embed API:** see `03-عقد-مشروع-الويب.mdc` (User + Admin + desktop bridge). Summary below; prefer the web contract when implementing the separate web repo.
+
+> **عربي:** لوحة الأدمن
+
+### 4.1 Admin dashboard
+- [ ] Customers / tenants  
+- [ ] Packages, subscriptions, wallets, top-ups  
+- [ ] Usage & billing reports  
+- [ ] Payments ledger (provider later)  
+- [ ] Audit / support tools  
+- [ ] Global model feature flags  
+
+> **عربي:** تطبيق اليوزر
+
+### 4.2 User app — ChatGPT / Meta-AI class shell (CRITICAL UX)
+
+**Layout**
+- [ ] Clear product identity (brand, avatar, package badge)  
+- [ ] Persistent **left sidebar** + main chat/plan canvas + optional right context  
+- [ ] Mobile-responsive sidebar (drawer)  
+
+**Sidebar — core (must)**
+- [ ] **New chat**  
+- [ ] **Search** chats / messages / plans (global)  
+- [ ] **Recent chats** (paginated / infinite)  
+- [ ] **Projects** (group chats + plans + notes under a named project; not the local git repo unless user links later)  
+- [ ] **Library** (saved prompts, uploaded images/docs allowed in cloud, bookmarked answers, plan templates)  
+- [ ] **Plans** (draft / approved / running / done — deep link into Plan Mode UI)  
+- [ ] **Usage / Wallet** (quota, tokens, cost, models used)  
+- [ ] **Settings / Profile** (language, default model, notifications)  
+
+**Sidebar — strong additions (should)**
+- [ ] **Scheduled** tasks / reminders (“Schedule” — e.g. remind to execute plan, weekly digest)  
+- [ ] **Starred / Pinned** chats  
+- [ ] **Archived** chats  
+- [ ] **Shared with me** (later; Phase 1 can stub)  
+- [ ] **Models** picker history / favorites  
+- [ ] **Help / What’s new**  
+
+**Sidebar — differentiators vs ChatGPT (nice)**
+- [ ] **Desktop Execute** status chip (plan waiting for desktop / running / done)  
+- [ ] **Linked workspace hint** (name only — never file upload)  
+- [ ] **Continue on Desktop** deep link / QR / “open in Vigil app”  
+
+**Main canvas**
+- [ ] Streaming chat, multi-model selector (entitlement-gated)  
+- [ ] Attach images/files that are **account assets** (Library) — not the user’s private repo  
+- [ ] Plan draft/approve panel  
+- [ ] Empty states that teach the continuum (“Plan here → Execute on desktop”)
+
+---
+
+> **عربي:** لوجن وتضمين الديسكتوب
+
+## 5. Desktop embedding of Vigil Web (same carbon UI)
+
+- [ ] Host Vigil Web inside desktop via **WebView / iframe / embedded browser tab** (reuse Vigil Browser patterns where fit)  
+- [ ] Same origin session / token bridge so login isn’t duplicated awkwardly  
+- [ ] Chat history in the embed === web history (Firestore)  
+- [ ] Desktop chrome around embed: local workspace, agent Execute, terminal, LSP  
+- [ ] Clear UX: “Cloud chat” (web shell) vs “Local agent run” (tools)  
+- [ ] Fallback: native chat UI that reads Firestore if embed unavailable — still cloud SoR  
+
+---
+
+> **عربي:** محور Firestore
+
+## 6. Firestore hub (SoR domains)
+
+- [ ] `users` / `orgs` / roles  
+- [ ] `packages`, `subscriptions`, `wallets`, `usageEvents`  
+- [ ] `chats`, `messages`  
+- [ ] `projects` (web-side project folders for chats/plans)  
+- [ ] `libraryItems`  
+- [ ] `plans` (portable artifact; syncable)  
+- [ ] `schedules` (optional Phase 1.5)  
+- [ ] `devices` / sessions  
+- [ ] Security rules: own-data; admin elevated  
+
+**Never in Firestore:** repo source, git objects, deep index.
+
+---
+
+> **عربي:** سلوكيات الاستمرارية بين المنصات
+
+## 7. Continuum behaviors
+
+> **عربي:** قسم — Sync
+
+### Sync
+- [ ] All first-party chat/plan writes go to Firestore when online  
+- [ ] Desktop + web always load from Firestore as primary  
+- [ ] Optional local cache warm on launch; invalidate on cloud newer `updatedAt`  
+- [ ] Agent coding tools never blocked by chat sync failures (queue cloud writes)
+
+> **عربي:** قسم — Plan handoff
+
+### Plan handoff
+- [ ] Approve on web → visible on desktop (embed or native)  
+- [ ] **Execute** runs local sidecar tools  
+- [ ] Status mirrored to Firestore for phone follow-up  
+
+> **عربي:** قياس الاستهلاك والمحفظة
+
+### Metering
+- [ ] One wallet across web + desktop + all enabled models + **unlimited devices** (same account)
+
+> **عربي:** قسم — Billing & identity continuum (see `03-عقد-مشروع-الويب.mdc` §2.3 + §2.4 + §5)
+
+### Billing & identity continuum (see `03-عقد-مشروع-الويب.mdc` §2.3 + §2.4 + §5)
+- [ ] User Web **Pricing → packages → checkout → auto activate** paid/partner in Firestore + Admin ledger  
+- [ ] **Free/trial** starter tokens for a configurable period  
+- [ ] Desktop EXE **opens Web login** → handoff back → account activated on desktop  
+- [ ] **Egypt local rails (must):** Card+Meeza, InstaPay (API), wallets (VF/Orange/e&/WE), Fawry reference — not Stripe-only; no manual transfer screenshots  
+
+---
+
+> **عربي:** نطاق المرحلة 1
+
+## 8. Phase 1 scope
+
+**In**
+- [ ] Firestore-first auth + schema  
+- [ ] Admin minimal + User shell with sidebar (New Chat, Search, Recents, Projects, Library, Plans, Usage)  
+- [ ] Chat/plan/usage in Firestore  
+- [ ] Desktop: login, show same history (prefer web embed), Execute plan locally  
+- [ ] Optional local cache **behind a flag** (default off or read-through only)  
+
+**Out of Phase 1**
+- [ ] Full payments polish  
+- [ ] Native mobile apps  
+- [ ] Remote agent mutating local disk from phone  
+- [ ] Uploading repos to cloud  
+
+---
+
+> **عربي:** ترتيب البناء عند بدء التنفيذ
+
+## 9. Build order (when execution starts)
+
+1. Plan Mode artifact stable (`01-وضع-التخطيط-Plan-Mode.mdc`)  
+2. Firebase Auth + Firestore schema + rules  
+3. User web shell (sidebar IA) + chat/plans against Firestore  
+4. Admin skeleton (packages/users/wallets)  
+5. Desktop login + **embed Vigil Web** + Execute handoff  
+6. Optional local cache layer  
+7. Schedule / advanced Library polish  
+
+---
+
+> **عربي:** معايير القبول — امتى نخلص؟
+
+## 10. Acceptance criteria (Phase 1)
+
+- [ ] Online Firestore is where chats/plans live by default  
+- [ ] Local DB not required for the happy path  
+- [ ] User web sidebar supports New Chat, Search, Recents, Projects, Library, Plans, Usage  
+- [ ] Desktop shows the **same** account history (embed preferred)  
+- [ ] Execute plan on desktop without re-briefing  
+- [ ] No project source in Firestore  
+- [ ] Admin can attach a package to a user  
+
+---
+
+> **عربي:** قرارات لسه مفتوحة
+
+## 11. Open decisions
+
+- [ ] Web app repo location (also tracked in `03-عقد-مشروع-الويب.mdc` §10)  
+- [ ] Embed tech: Tauri webview vs existing Vigil Browser tab vs iframe to hosted URL  
+- [ ] Auth token bridge desktop↔embed  
+- [ ] BYOK vs hosted keys for cloud chat  
+- [ ] Whether “Projects” can later link to a local folder path (name/path hint only)
+
+---
+
+> **عربي:** صندوق الأفكار
+
+## 12. Ideas inbox
+
+- 2026-11-11: Initial continuum vision.  
+- 2026-11-11: **Firestore-first**; local DB **optional** — not the base.  
+- 2026-11-11: User web needs ChatGPT/Meta-like sidebar (New Chat, Schedule, Library, Projects, Recents, Search, …).  
+- 2026-11-11: Desktop should **host/iframe** the same web so history UX is carbon-copy; agent Execute stays local.  
+- 2026-11-11: Split **portable Vigil Web contract** into `03-عقد-مشروع-الويب.mdc` for the separate web repo (still related / continuum with desktop).  
+- 2026-11-11: Billing+auth continuum: Pricing/checkout, free trial, auto paid/partner, Admin ledger, EXE→Web login handoff, multi-device one wallet; Egypt PSP open.  
+- 
+
+---
+
+> **عربي:** حاجات مش في النطاق / خطوط حمراء
+
+## 13. Non-goals / guardrails
+
+- Not making VigilDB the long-term SoR for chats  
+- Not uploading codebases to Firebase  
+- Not claiming phone can patch the local monorepo in Phase 1  
+- Not cloning VigilHub ERP screens blindly  

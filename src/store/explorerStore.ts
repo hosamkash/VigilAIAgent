@@ -8,6 +8,7 @@ import {
 import { ensureProjectRules } from "../lib/project-rules";
 import { listDir, type DirEntryInfo } from "../lib/workspace-fs";
 import { useEditorTabsStore } from "./editorTabsStore";
+import { useWorkspaceIndexStore } from "./workspaceIndexStore";
 
 interface ExplorerState {
   root: string | null;
@@ -68,6 +69,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       error: null,
       launcherOpen: false,
     });
+    void useWorkspaceIndexStore.getState().rebuild(root);
   },
   addFolder: async (path) => {
     if (!get().root) {
@@ -86,6 +88,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   closeWorkspace: () => {
     clearLastWorkspace();
     useEditorTabsStore.getState().closeAll();
+    useWorkspaceIndexStore.getState().clear();
     set({
       root: null,
       extraRoots: [],
@@ -186,6 +189,9 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     try {
       const entries = await listDir(target);
       set((s) => ({ children: { ...s.children, [target]: entries } }));
+      if (!path || path === get().root) {
+        void useWorkspaceIndexStore.getState().rebuild(get().root);
+      }
     } catch (err) {
       set({ error: String(err) });
     }

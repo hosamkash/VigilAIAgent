@@ -51,6 +51,11 @@ import {
 } from "../../../lib/git";
 import type { ChangeSort, ChangeView } from "../../../lib/scm-view";
 import { buildRemotePageUrl } from "../../../lib/git-remote-web";
+import {
+  createPullRequest,
+  fetchCiStatus,
+  formatCiStatusForAgent,
+} from "../../../lib/git-pr";
 import { openTerminalUrl } from "../../../lib/terminal-links";
 import type { ScmPromptRequest } from "./ScmMenu";
 
@@ -484,6 +489,73 @@ export async function runScmCommand(
             ? gitCreateBranch(root, next, { checkout: true })
             : gitRenameBranch(root, next),
       );
+      return;
+    }
+    case "checkCiStatus": {
+      try {
+        const summary = await fetchCiStatus(root);
+        const text = formatCiStatusForAgent(summary);
+        await attempt(`CI · ${summary.state}`, async () => text);
+        useLayoutStore.getState().setBottomTab("output");
+      } catch (err) {
+        setUiError(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+    case "createPullRequest": {
+      const branch = status?.branch?.trim();
+      if (!branch || branch === "HEAD") {
+        setUiError("Checkout a named branch first");
+        return;
+      }
+      const title = await ask({
+        kind: "input",
+        title: "Pull request title",
+        placeholder: branch,
+        initial: branch,
+        confirm: "Create draft PR",
+      });
+      if (!title) return;
+      const body = await ask({
+        kind: "input",
+        title: "PR description (optional)",
+        placeholder: "Summary of changes…",
+        confirm: "Continue",
+      });
+      try {
+        const pr = await createPullRequest(root, {
+          title: title.trim() || branch,
+          body: body?.trim() || "",
+          draft: true,
+        });
+        setUiError(null);
+        await openTerminalUrl(pr.url);
+        useLayoutStore.getState().setBottomTab("output");
+        // Surface success in the SCM output stream via a no-op attempt label.
+        await attempt(
+          `Draft ${pr.host === "gitlab" ? "MR" : "PR"} #${pr.number} · ${pr.url}`,
+          async () => pr.url,
+        );
+      } catch (err) {
+        // Fall back to the host's web create page when API/credentials fail.
+        try {
+          const preferred = gitPreferredRemoteName(status?.upstream);
+          let remoteUrl = await gitGetRemoteUrl(root, preferred);
+          if (!remoteUrl && preferred !== "origin") {
+            remoteUrl = await gitGetRemoteUrl(root, "origin");
+          }
+          if (!remoteUrl) throw err;
+          const { href } = buildRemotePageUrl(remoteUrl, branch, "pr");
+          await openTerminalUrl(href);
+          setUiError(
+            `${err instanceof Error ? err.message : String(err)} — opened web PR page`,
+          );
+        } catch (fallbackErr) {
+          setUiError(
+            fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+          );
+        }
+      }
       return;
     }
     case "openPullRequest":

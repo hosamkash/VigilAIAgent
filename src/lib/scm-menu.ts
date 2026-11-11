@@ -138,8 +138,18 @@ export function buildScmMenu(opts: {
       disabled: repoBusy,
       children: [
         {
+          id: "createPullRequest",
+          label: "Create Draft PR/MR…",
+          disabled: history,
+        },
+        {
+          id: "checkCiStatus",
+          label: "Check CI Status…",
+          disabled: history,
+        },
+        {
           id: "openPullRequest",
-          label: "Create Pull Request…",
+          label: "Open PR Page on Remote…",
           disabled: history,
         },
         {

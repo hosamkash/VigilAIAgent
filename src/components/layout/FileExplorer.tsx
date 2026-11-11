@@ -21,6 +21,8 @@ import {
   useExplorerDragStore,
 } from "../../lib/explorer-drag-session";
 import { useComposerContextStore } from "../../store/composerContextStore";
+import { useWorkspaceIndexStore } from "../../store/workspaceIndexStore";
+import { openAndRevealFile } from "../../lib/open-workspace-file";
 
 function gitColorVar(kind: ExplorerGitDecoration["kind"]): string {
   return `var(--vigil-git-${kind})`;
@@ -675,12 +677,7 @@ export function FileExplorer() {
           </div>
         ))}
       </div>
-      <div className="border-t border-[var(--vigil-border)] px-3 py-2 text-[10px] text-[var(--vigil-muted)]">
-        <div className="mb-1 font-semibold uppercase">Outline</div>
-        <div>No symbols</div>
-        <div className="mt-2 mb-1 font-semibold uppercase">Timeline</div>
-        <div>Local history coming soon</div>
-      </div>
+      <OutlinePanel />
       {menu && (
         <ExplorerMenu
           menu={menu}
@@ -707,6 +704,49 @@ export function FileExplorer() {
           onDelete={() => void deleteEntry(menu.entry)}
         />
       )}
+    </div>
+  );
+}
+
+function OutlinePanel() {
+  const activeId = useEditorTabsStore((s) => s.activeId);
+  const tabs = useEditorTabsStore((s) => s.tabs);
+  const indexing = useWorkspaceIndexStore((s) => s.indexing);
+  const symbolsForPath = useWorkspaceIndexStore((s) => s.symbolsForPath);
+  const active = tabs.find((t) => t.id === activeId);
+  const path = active?.mode === "file" ? active.path : null;
+  const symbols = path ? symbolsForPath(path).slice(0, 40) : [];
+
+  return (
+    <div className="border-t border-[var(--vigil-border)] px-3 py-2 text-[10px] text-[var(--vigil-muted)]">
+      <div className="mb-1 font-semibold uppercase">Outline</div>
+      {!path ? (
+        <div>Open a file to see symbols</div>
+      ) : indexing && symbols.length === 0 ? (
+        <div>Indexing…</div>
+      ) : symbols.length === 0 ? (
+        <div>No symbols</div>
+      ) : (
+        <ul className="max-h-28 space-y-0.5 overflow-auto">
+          {symbols.map((sym) => (
+            <li key={`${sym.path}:${sym.line}:${sym.name}`}>
+              <button
+                type="button"
+                className="block w-full truncate text-left text-[var(--vigil-text)] hover:text-[var(--vigil-accent)]"
+                title={`${sym.kind} · L${sym.line}`}
+                onClick={() =>
+                  void openAndRevealFile(sym.path, { revealLine: sym.line })
+                }
+              >
+                <span className="text-[var(--vigil-muted)]">{sym.kind} </span>
+                {sym.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-2 mb-1 font-semibold uppercase">Timeline</div>
+      <div>Local history coming soon</div>
     </div>
   );
 }

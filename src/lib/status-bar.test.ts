@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { agentStats, isWarningProblem, languageLabel, tabStats } from "./status-bar";
+import {
+  agentStats,
+  codeIndexLabel,
+  isWarningProblem,
+  languageLabel,
+  tabStats,
+} from "./status-bar";
 
 describe("status bar labels", () => {
+  it("labels the local code index", () => {
+    expect(codeIndexLabel(true, 0)).toBe("Index…");
+    expect(codeIndexLabel(false, 120)).toBe("Index: 120");
+    expect(codeIndexLabel(false, 120, true)).toBe("Deep: 120");
+    expect(codeIndexLabel(false, null)).toBe("Index: —");
+  });
+
   it("names languages the way the editor status bar does", () => {
     expect(languageLabel("src/App.tsx", "typescript")).toBe("TypeScript JSX");
     expect(languageLabel("notes.md", "markdown")).toBe("Markdown");

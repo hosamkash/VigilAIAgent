@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { pushCommandHistory } from "../lib/terminal-history";
+import type { EditorProblem } from "../lib/editor-diagnostics";
 
 export interface TerminalSession {
   id: string;
@@ -20,7 +21,7 @@ export type PendingTerminalRun = {
 interface TerminalState {
   terminals: TerminalSession[];
   activeId: string | null;
-  problems: string[];
+  problems: EditorProblem[];
   output: string;
   /** Previously run shell commands for ↑ / ↓ recall. */
   commands: string[];
@@ -31,7 +32,8 @@ interface TerminalState {
   setActive: (id: string) => void;
   appendHistory: (id: string, chunk: string) => void;
   appendOutput: (chunk: string) => void;
-  addProblem: (msg: string) => void;
+  addProblem: (msg: string | EditorProblem) => void;
+  setProblems: (problems: EditorProblem[]) => void;
   clearProblems: () => void;
   clearSignal: number;
   requestClear: () => void;
@@ -125,7 +127,23 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     })),
   appendOutput: (chunk) =>
     set((s) => ({ output: `${s.output}${chunk}` })),
-  addProblem: (msg) => set((s) => ({ problems: [...s.problems, msg] })),
+  addProblem: (msg) =>
+    set((s) => ({
+      problems: [
+        ...s.problems,
+        typeof msg === "string"
+          ? {
+              id: crypto.randomUUID(),
+              path: "",
+              message: msg,
+              severity: /\bwarn(ing)?\b/i.test(msg) ? "warning" : "error",
+              line: 1,
+              column: 1,
+            }
+          : msg,
+      ],
+    })),
+  setProblems: (problems) => set({ problems }),
   clearProblems: () => set({ problems: [] }),
   requestClear: () =>
     set((s) => ({

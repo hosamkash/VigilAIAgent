@@ -11,6 +11,7 @@
 
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,14 +20,31 @@ import {
   read_file,
   write_file,
   buildVigilExtraTools,
+  cancelActiveCommand,
+  ensureCodeIndex,
+  buildCodeIndex,
+  upsertIndexedFile,
+  getCodeIndexStatus,
 } from "./tools.mjs";
 import { createCheckpointWriter, installWriteCapture } from "./checkpoints.mjs";
 import { AgentTextStream } from "./agent-stream.mjs";
+import {
+  buildToolPolicies,
+  createApprovalGate,
+  cancelAllPendingApprovals,
+  resolvePendingApproval,
+} from "./approvals.mjs";
+import {
+  extractPatchPaths,
+  extractPatchText,
+} from "./apply-patch-files.mjs";
+import { formatProjectScriptTips } from "./project-scripts.mjs";
 
 const PORT = Number(process.env.VIGIL_SIDECAR_PORT || 47821);
 const SECRET = process.env.VIGIL_LAUNCH_SECRET || "";
 const SESSION_ID = process.env.VIGIL_SESSION_ID || "";
-const CWD = process.env.VIGIL_CWD || process.cwd();
+/** Fallback only — every task should pass an explicit workspace cwd. */
+const BOOT_CWD = process.env.VIGIL_CWD || process.cwd();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -177,12 +195,50 @@ function resolveProviderAndModel(payload) {
   return { providerId, modelId };
 }
 
-async function startWithModel(cline, { providerId, modelId, apiKey, cwd, prompt, extraTools, replyStyle }) {
+async function startWithModel(
+  cline,
+  {
+    providerId,
+    modelId,
+    apiKey,
+    cwd,
+    prompt,
+    extraTools,
+    replyStyle,
+    autoRun,
+    toolPolicies,
+    scriptTips,
+  },
+) {
   const style = typeof replyStyle === "string" ? replyStyle.trim() : "";
+  const tips = typeof scriptTips === "string" ? scriptTips.trim() : "";
   const systemPrompt =
     "You are Vigil, a personal desktop AI coding agent. Be actionable. " +
-    "Prefer the write_file / read_file / list_files tools for filesystem work. " +
-    "When asked to create a file, call write_file immediately with the full contents. " +
+    "Prefer read_file / list_files / search_files / search_codebase to understand the workspace. " +
+    "When the user asks where a symbol lives, how modules connect, or what to read first " +
+    "in a large repo, prefer search_codebase (deep local BM25+vector index + import graph + paths + content). " +
+    "For a known symbol name, prefer find_definition then find_references before broad ripgrep. " +
+    "Use search_files for precise regex/glob sweeps. " +
+    "Call reindex_codebase only if index hits look stale after a large refactor. " +
+    "Always search in the workspace cwd. " +
+    "File/folder references in the prompt already include content or listings — use them before re-reading. " +
+    "For NEW files only, call write_file with the full contents. " +
+    "For edits to EXISTING files, prefer apply_patch (surgical diffs) over rewriting the whole file. " +
+    "Never rewrite an existing file with write_file unless the user explicitly asked for a full replace " +
+    "or the file is brand new. When changing several files, apply_patch once per file (or one multi-file patch). " +
+    "HARD GATE: after a batch of meaningful code edits in the same turn, you MUST run the project's " +
+    "preferred test (or lint if no test) via run_commands before you finish. " +
+    "If it fails, fix with apply_patch and re-run until green or you hit a real blocker. " +
+    "Do not claim done while tests are still failing. " +
+    "When Auto-run is off, wait for tool approval before each non-allowlisted command. " +
+    "For multi-step tasks, call manage_plan first with clear steps, keep exactly one in_progress, " +
+    "and mark steps completed as you go so the user sees progress. " +
+    "Do not skip manage_plan on large features, refactors, or test/fix loops. " +
+    "For isolated experiments use prepare_worktree then pass workdir=... to later tools. " +
+    "On large multi-area work, prefer parallel_investigate for cheap fan-out, or delegate_tasks " +
+    "for independent subagents (optionally with branch worktrees). " +
+    "After pushing a feature branch: create_pull_request (draft), then push_and_check_ci / get_ci_status; " +
+    "if CI fails, fix with apply_patch, push_and_check_ci again until green. " +
     "Vigil Browser is the in-editor preview tab only. When the user asks to open a browser, " +
     "preview, localhost, a module, or a tool page: call browser_open with the full URL " +
     "(or 'project'). That updates the IDE tab — nothing outside Vigil. " +
@@ -196,18 +252,22 @@ async function startWithModel(cline, { providerId, modelId, apiKey, cwd, prompt,
     "Always reply in the same language as the user's latest message " +
     "(Arabic→Arabic, English→English, and the same for every other language). " +
     "Do not switch languages unless the user asks. Keep code and paths unchanged." +
+    (tips ? `\n\nProject scripts:\n${tips}` : "") +
     (style ? `\n\n${style}` : "");
+  const yolo = !!autoRun;
   return cline.start({
     config: {
       providerId,
       modelId,
       apiKey,
       cwd,
-      mode: "yolo",
+      workspaceRoot: cwd,
+      mode: yolo ? "yolo" : "act",
       enableTools: true,
       enableSpawnAgent: false,
       enableAgentTeams: false,
-      yolo: true,
+      yolo,
+      toolPolicies,
       systemPrompt,
       extraTools,
     },
@@ -224,7 +284,19 @@ async function runClineTask(payload, emit) {
   const { providerId, modelId } = resolveProviderAndModel(payload);
   const apiKey = payload.apiKey;
   const prompt = payload.prompt || "";
-  const cwd = payload.cwd || CWD;
+  const cwd = String(payload.cwd || BOOT_CWD).replace(/\/+$/, "") || BOOT_CWD;
+  const autoRun = payload.autoRun === true;
+  const toolPolicies = buildToolPolicies(autoRun);
+  const commandAllowlist = Array.isArray(payload.commandAllowlist)
+    ? payload.commandAllowlist
+    : [];
+  const pathDenylist = Array.isArray(payload.pathDenylist)
+    ? payload.pathDenylist
+    : [];
+  const approvalGate = createApprovalGate(emit, autoRun, {
+    commandAllowlist,
+    pathDenylist,
+  });
 
   if (!apiKey) {
     throw new Error(
@@ -240,12 +312,26 @@ async function runClineTask(payload, emit) {
 
   emit({
     type: "status",
-    status: `provider=${providerId} model=${candidates[0]}`,
+    status: `provider=${providerId} model=${candidates[0]} cwd=${cwd} autoRun=${autoRun}`,
   });
+
+  // Warm local code index in the background so search_codebase is ready.
+  void ensureCodeIndex(cwd).then(
+    (idx) =>
+      emit({
+        type: "status",
+        status: `code_index=${idx.fileCount}f/${idx.chunkCount}c`,
+      }),
+    () => {},
+  );
 
   const cline = await ClineCore.create({
     clientName: "vigil-agent",
     backendMode: "local",
+    capabilities: {
+      requestToolApproval: (request) => approvalGate.request(request),
+    },
+    toolPolicies,
   });
 
   const checkpoint = payload.checkpointId
@@ -259,6 +345,14 @@ async function runClineTask(payload, emit) {
     ? installWriteCapture(checkpoint.remember, checkpoint.rememberSync)
     : () => {};
 
+  /** Shared bag so model fallbacks update nested delegates too. */
+  const subagentRuntime = {
+    loadClineCore,
+    providerId,
+    modelId: candidates[0],
+    apiKey,
+    autoRun,
+  };
   const extraTools = buildVigilExtraTools(
     cwd,
     (write) => {
@@ -267,10 +361,15 @@ async function runClineTask(payload, emit) {
         toolName: "write_file",
         path: write.path,
         content: write.content,
+        original: write.original ?? "",
       });
     },
     checkpoint?.remember,
     emit,
+    {
+      allowDelegate: true,
+      subagent: subagentRuntime,
+    },
   );
   emit({
     type: "status",
@@ -279,11 +378,80 @@ async function runClineTask(payload, emit) {
 
   const visible = new AgentTextStream();
   let sent = "";
+  /** @type {Map<string, string>} abs path → original content before apply_patch */
+  const patchOriginals = new Map();
   const emitAnswer = () => {
     const next = visible.text;
     if (!next.startsWith(sent) || next.length === sent.length) return;
     emit({ type: "chunk", stream: "agent", text: next.slice(sent.length) });
     sent = next;
+  };
+
+  const resolveUnderCwd = (relOrAbs) => {
+    const raw = String(relOrAbs || "").trim();
+    if (!raw) return "";
+    return path.isAbsolute(raw) ? raw : path.resolve(cwd, raw);
+  };
+
+  const readUtf8Safe = (abs) => {
+    try {
+      return fs.readFileSync(abs, "utf8");
+    } catch {
+      return "";
+    }
+  };
+
+  const emitApplyPatchFiles = (hookName, input) => {
+    const patchText = extractPatchText(input);
+    const paths = extractPatchPaths(patchText);
+    const single =
+      typeof input?.path === "string" && input.path.trim()
+        ? [input.path.trim()]
+        : [];
+    const all = paths.length > 0 ? paths : single;
+    if (all.length === 0) {
+      emit({
+        type: "tool",
+        toolName: "apply_patch",
+        hook: hookName === "tool_call" ? "start" : hookName === "tool_result" ? "end" : hookName,
+      });
+      return;
+    }
+    for (const rel of all) {
+      const abs = resolveUnderCwd(rel);
+      if (hookName === "tool_call") {
+        const original = readUtf8Safe(abs);
+        patchOriginals.set(abs, original);
+        emit({
+          type: "tool",
+          toolName: "apply_patch",
+          hook: "start",
+          path: rel,
+          original,
+          content: "",
+        });
+      } else if (hookName === "tool_result") {
+        const original = patchOriginals.get(abs) ?? "";
+        patchOriginals.delete(abs);
+        const content = readUtf8Safe(abs);
+        void upsertIndexedFile(cwd, rel, content).catch(() => {});
+        emit({
+          type: "tool",
+          toolName: "apply_patch",
+          hook: "end",
+          path: rel,
+          original,
+          content,
+        });
+      } else {
+        emit({
+          type: "tool",
+          toolName: "apply_patch",
+          hook: hookName,
+          path: rel,
+        });
+      }
+    }
   };
 
   const unsub = cline.subscribe((event) => {
@@ -297,10 +465,24 @@ async function runClineTask(payload, emit) {
         else if (inner && typeof inner === "object") visible.push(JSON.stringify(inner));
         emitAnswer();
       } else if (event.type === "hook") {
+        const toolName = event.payload?.toolName;
+        const hookName = event.payload?.hookEventName;
+        if (toolName === "apply_patch") {
+          emitApplyPatchFiles(hookName, event.payload?.input || event.payload || {});
+          return;
+        }
         emit({
           type: "tool",
-          toolName: event.payload?.toolName,
-          hook: event.payload?.hookEventName,
+          toolName,
+          hook: hookName,
+          path: event.payload?.path || event.payload?.input?.path,
+          content: event.payload?.content || event.payload?.input?.content,
+          command:
+            event.payload?.command ||
+            event.payload?.input?.command ||
+            (Array.isArray(event.payload?.input?.commands)
+              ? event.payload.input.commands.join(" && ")
+              : undefined),
         });
       } else if (event.type === "ended") {
         emit({ type: "status", status: "ended" });
@@ -316,6 +498,7 @@ async function runClineTask(payload, emit) {
     let started = null;
     let usedModel = candidates[0];
     let lastErr = null;
+    const scriptTips = await formatProjectScriptTips(cwd).catch(() => "");
 
     for (const candidate of candidates) {
       try {
@@ -328,6 +511,9 @@ async function runClineTask(payload, emit) {
           prompt,
           extraTools,
           replyStyle: payload.replyStyle,
+          autoRun,
+          toolPolicies,
+          scriptTips,
         });
         const resultText = started?.result?.text ?? "";
         // Some SDKs return the 404 as answer text instead of throwing.
@@ -341,6 +527,7 @@ async function runClineTask(payload, emit) {
           continue;
         }
         usedModel = candidate;
+        subagentRuntime.modelId = candidate;
         lastErr = null;
         break;
       } catch (err) {
@@ -379,6 +566,7 @@ async function runClineTask(payload, emit) {
     });
     return { sessionId: started.sessionId, text, toolCalls, modelId: usedModel };
   } finally {
+    approvalGate.cancelAll();
     try {
       unsub();
     } catch {
@@ -422,8 +610,11 @@ const server = createServer(async (req, res) => {
   try {
     const payload = body ? JSON.parse(body) : {};
 
+    const requestCwd =
+      String(payload.cwd || BOOT_CWD).replace(/\/+$/, "") || BOOT_CWD;
+
     if (payload.op === "list_files") {
-      const result = await list_files(payload.path || ".", CWD);
+      const result = await list_files(payload.path || ".", requestCwd);
       const out = JSON.stringify(result);
       res.writeHead(200, {
         "content-type": "application/json",
@@ -434,7 +625,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (payload.op === "read_file") {
-      const result = await read_file(payload.path, CWD);
+      const result = await read_file(payload.path, requestCwd);
       const out = JSON.stringify(result);
       res.writeHead(200, {
         "content-type": "application/json",
@@ -445,7 +636,91 @@ const server = createServer(async (req, res) => {
     }
 
     if (payload.op === "write_file") {
-      const result = await write_file(payload.path, payload.content ?? "", CWD);
+      const result = await write_file(
+        payload.path,
+        payload.content ?? "",
+        requestCwd,
+      );
+      const out = JSON.stringify(result);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
+    if (payload.op === "tool_approval") {
+      const ok = resolvePendingApproval(
+        String(payload.id || payload.toolCallId || ""),
+        payload.decision === "allow_session"
+          ? "allow_session"
+          : payload.decision === "allow" || payload.approved === true
+            ? "allow"
+            : "skip",
+      );
+      const out = JSON.stringify({ ok });
+      res.writeHead(ok ? 200 : 404, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
+    if (payload.op === "ensure_code_index") {
+      await ensureCodeIndex(requestCwd, {
+        force: !!payload.force,
+      });
+      const status = await getCodeIndexStatus(requestCwd);
+      const out = JSON.stringify(status);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
+    if (payload.op === "reindex_codebase") {
+      await buildCodeIndex(requestCwd);
+      const status = await getCodeIndexStatus(requestCwd);
+      const out = JSON.stringify(status);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
+    if (payload.op === "code_index_status") {
+      const status = await getCodeIndexStatus(requestCwd);
+      const out = JSON.stringify(status);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
+    if (payload.op === "update_code_index_file") {
+      const rel = String(payload.path || "").trim();
+      if (!rel) {
+        const out = JSON.stringify({ ok: false, error: "path required" });
+        res.writeHead(400, {
+          "content-type": "application/json",
+          "x-vigil-hmac": sign(out),
+        });
+        res.end(out);
+        return;
+      }
+      const content =
+        payload.delete === true || payload.content === null
+          ? null
+          : String(payload.content ?? "");
+      const result = await upsertIndexedFile(requestCwd, rel, content);
       const out = JSON.stringify(result);
       res.writeHead(200, {
         "content-type": "application/json",
@@ -459,7 +734,7 @@ const server = createServer(async (req, res) => {
       const out = JSON.stringify({
         ok: true,
         sessionId: SESSION_ID,
-        cwd: CWD,
+        cwd: BOOT_CWD,
       });
       res.writeHead(200, {
         "content-type": "application/json",
@@ -481,12 +756,21 @@ const server = createServer(async (req, res) => {
         res.write(line);
       };
 
+      const onClientGone = () => {
+        cancelActiveCommand();
+        cancelAllPendingApprovals();
+      };
+      req.on("close", onClientGone);
+      res.on("close", onClientGone);
+
       try {
         emit({ type: "status", status: "starting" });
         await runClineTask(payload, emit);
       } catch (err) {
         emit({ type: "error", message: String(err) });
       }
+      req.off("close", onClientGone);
+      res.off("close", onClientGone);
       res.end();
       return;
     }

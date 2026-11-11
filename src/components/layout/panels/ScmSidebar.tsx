@@ -855,10 +855,10 @@ export function ScmSidebar() {
         <button
           type="button"
           disabled={!!noCommits || !!progress || !status?.branch}
-          title="Create pull request for the current branch on the remote"
-          aria-label="Create pull request on remote"
+          title="Create a draft PR/MR via API (falls back to the web page)"
+          aria-label="Create pull request"
           className="ml-auto flex shrink-0 items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[10px] text-[var(--vigil-muted)] hover:bg-[var(--vigil-hover)] hover:text-[var(--vigil-text)] disabled:opacity-40"
-          onClick={() => runCommand("openPullRequest")}
+          onClick={() => runCommand("createPullRequest")}
         >
           <ExternalLink className="h-3 w-3" />
           <span>PR</span>
@@ -999,10 +999,10 @@ export function ScmSidebar() {
                 disabled={!!progress || noCommits}
                 onClick={() => {
                   setCommitMenuOpen(false);
-                  runCommand("openPullRequest");
+                  runCommand("createPullRequest");
                 }}
               >
-                Create Pull Request…
+                Create Draft PR/MR…
               </button>
               <button
                 type="button"
