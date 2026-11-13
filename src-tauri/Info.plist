@@ -10,6 +10,17 @@
 	<string>Vigil AI Agent needs the microphone for voice-to-text in chat.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Vigil AI Agent uses speech recognition to turn your voice into chat text.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.vigil.agent</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>vigil</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
 

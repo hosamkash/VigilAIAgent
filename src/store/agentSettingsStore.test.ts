@@ -20,6 +20,8 @@ describe("agentSettingsStore", () => {
     memory.clear();
     useAgentSettingsStore.setState({
       agentAutoRun: false,
+      chatMode: "agent",
+      autoSuggestPlanMode: true,
       commandAllowlist: ["npm test"],
       pathDenylist: [".env"],
     });
@@ -33,5 +35,18 @@ describe("agentSettingsStore", () => {
     useAgentSettingsStore.getState().setAgentAutoRun(true);
     expect(memory.get("vigil.agent.autoRun")).toBe("1");
     expect(useAgentSettingsStore.getState().agentAutoRun).toBe(true);
+
+    useAgentSettingsStore.getState().setChatMode("plan");
+    expect(memory.get("vigil.agent.chatMode")).toBe("plan");
+    expect(useAgentSettingsStore.getState().chatMode).toBe("plan");
+    useAgentSettingsStore.getState().setChatMode("ask");
+    expect(memory.get("vigil.agent.chatMode")).toBe("ask");
+    expect(useAgentSettingsStore.getState().chatMode).toBe("ask");
+    useAgentSettingsStore.getState().setChatMode("agent");
+    expect(useAgentSettingsStore.getState().chatMode).toBe("agent");
+
+    useAgentSettingsStore.getState().setAutoSuggestPlanMode(false);
+    expect(memory.get("vigil.agent.autoSuggestPlanMode")).toBe("0");
+    expect(useAgentSettingsStore.getState().autoSuggestPlanMode).toBe(false);
   });
 });

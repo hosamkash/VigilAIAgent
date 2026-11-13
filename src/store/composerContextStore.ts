@@ -8,7 +8,14 @@ const MAX_CHIP_CHARS = 12_000;
 
 export type ComposerContextChip = {
   id: string;
-  kind: "terminal" | "file" | "folder" | "symbol" | "virtual" | "selection";
+  kind:
+    | "terminal"
+    | "file"
+    | "folder"
+    | "symbol"
+    | "virtual"
+    | "selection"
+    | "sql_table";
   title: string;
   detail: string;
   text: string;
@@ -20,6 +27,8 @@ export type ComposerContextChip = {
   endLine?: number;
   /** Virtual mention id: problems | codebase | open */
   virtualId?: "problems" | "codebase" | "open";
+  /** SQL object: schema.table */
+  sqlObject?: string;
 };
 
 type TerminalSelectionInput = {
@@ -59,6 +68,12 @@ interface ComposerContextState {
   addSymbol: (input: SymbolInput) => string | null;
   addCodeSelection: (input: CodeSelectionInput) => string | null;
   addVirtual: (virtualId: "problems" | "codebase" | "open") => string | null;
+  addSqlTable: (input: {
+    schema: string;
+    name: string;
+    columnsPreview?: string;
+    connectionLabel?: string | null;
+  }) => string | null;
   addExplorerItems: (
     items: VigilExplorerDragItem[],
     workspaceRoot?: string | null,
@@ -124,6 +139,14 @@ export function formatComposerContext(chips: ComposerContextChip[]): string {
       if (chip.kind === "virtual") {
         return `[Virtual reference: @${chip.title}]`;
       }
+      if (chip.kind === "sql_table") {
+        return (
+          `[SQL table reference: @table ${chip.sqlObject || chip.title}]\n` +
+          (chip.detail ? `connection: ${chip.detail}\n` : "") +
+          (chip.text ? `${chip.text}\n` : "") +
+          `[/SQL table reference]`
+        );
+      }
       return "";
     })
     .filter(Boolean)
@@ -138,6 +161,9 @@ export function formatComposerChipLabels(chips: ComposerContextChip[]): string {
       }
       if (chip.kind === "symbol" || chip.kind === "virtual") {
         return `@${chip.title}`;
+      }
+      if (chip.kind === "sql_table") {
+        return `@table:${chip.sqlObject || chip.title}`;
       }
       if (chip.kind === "selection") {
         return `@${chip.detail} (${chip.title})`;
@@ -290,6 +316,34 @@ export const useComposerContextStore = create<ComposerContextState>((set, get) =
           detail: meta.detail,
           text: virtualId,
           virtualId,
+        },
+      ],
+    }));
+    return id;
+  },
+  addSqlTable: (input) => {
+    const schema = (input.schema || "dbo").trim() || "dbo";
+    const name = input.name.trim();
+    if (!name) return null;
+    const sqlObject = `${schema}.${name}`;
+    const existing = get().chips.find(
+      (chip) => chip.kind === "sql_table" && chip.sqlObject === sqlObject,
+    );
+    if (existing) return existing.id;
+    const id = crypto.randomUUID();
+    const preview = (input.columnsPreview || "").trim();
+    set((state) => ({
+      chips: [
+        ...state.chips,
+        {
+          id,
+          kind: "sql_table",
+          title: name,
+          detail: input.connectionLabel || "DB",
+          text: preview
+            ? `object: ${sqlObject}\n${preview}`
+            : `object: ${sqlObject}`,
+          sqlObject,
         },
       ],
     }));

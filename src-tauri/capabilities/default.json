@@ -42,6 +42,7 @@
     "opener:default",
     "dialog:default",
     "fs:default",
+    "deep-link:default",
     "allow-vigil-commands",
     "http:allow-fetch",
     "http:allow-fetch-cancel",

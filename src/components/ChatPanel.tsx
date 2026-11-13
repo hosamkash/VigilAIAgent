@@ -47,6 +47,10 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { EditedFilesList } from "./EditedFilesList";
 import { CommandResultCard } from "./CommandResultCard";
 import { AgentPlanCard } from "./AgentPlanCard";
+import { PlanPanel } from "./PlanPanel";
+import { deriveExecutionOutcome } from "../lib/plan-artifact";
+import { shouldSuggestPlanMode } from "../lib/plan-mode-heuristics";
+import { usePlanStore } from "../store/planStore";
 import { ClipShelfButton } from "./ClipShelfButton";
 import { buildReplyStyleInstruction } from "../lib/chat-preferences";
 import { setClipImageSink, useClipShelf } from "../lib/clip-shelf";
@@ -104,9 +108,14 @@ import {
   type AtMentionQuery,
 } from "../lib/composer-at-mention";
 import { useWorkspaceIndexStore } from "../store/workspaceIndexStore";
+import { useDesktopAppStore } from "../store/desktopAppStore";
+import { useSqlSessionStore } from "../store/sqlSessionStore";
+import { useSqlCatalogStore } from "../store/sqlCatalogStore";
+import { useSupportTicketStore } from "../store/supportTicketStore";
 import { useExplorerDragStore } from "../lib/explorer-drag-session";
 import { openAndRevealFile } from "../lib/open-workspace-file";
 import { PaneToggleButton } from "./layout/PaneToggleButton";
+import { SupportTicketPanel } from "./SupportTicketPanel";
 
 function isAbortError(err: unknown): boolean {
   return (
@@ -940,6 +949,9 @@ export function ChatPanel() {
     summary: string;
   } | null>(null);
   const agentAutoRun = useAgentSettingsStore((s) => s.agentAutoRun);
+  const chatMode = useAgentSettingsStore((s) => s.chatMode);
+  const setChatMode = useAgentSettingsStore((s) => s.setChatMode);
+  const activePlan = usePlanStore((s) => s.activePlan);
   const [checkpointIds, setCheckpointIds] = useState<Set<string>>(new Set());
   const [folds, setFolds] = useState<Record<string, TurnFold>>({});
   const fold = folds[tabKey] ?? { mode: "all-open" as const, except: [] };
@@ -1259,6 +1271,11 @@ export function ChatPanel() {
   function cancelRunning() {
     abortRef.current?.abort();
     setToolApproval(null);
+    // Chat Stop mid-plan → pause (keep statuses) rather than cancel the plan.
+    const plan = usePlanStore.getState().activePlan;
+    if (plan?.status === "running") {
+      void usePlanStore.getState().pauseExecute();
+    }
   }
 
   async function answerToolApproval(decision: "allow" | "skip" | "allow_session") {
@@ -1556,6 +1573,10 @@ export function ChatPanel() {
         checkpointAt: Date.now(),
         replyStyle: styleParts.join("\n\n"),
         autoRun: useAgentSettingsStore.getState().agentAutoRun,
+        planMode: useAgentSettingsStore.getState().chatMode === "plan",
+        askMode: useAgentSettingsStore.getState().chatMode === "ask",
+        planExecuteUnlocked:
+          usePlanStore.getState().planExecuteUnlocked === true,
         commandAllowlist: useAgentSettingsStore.getState().commandAllowlist,
         pathDenylist: useAgentSettingsStore.getState().pathDenylist,
         cwd: (await getWorkspaceCwd().catch(() => undefined)) || undefined,
@@ -1615,6 +1636,15 @@ export function ChatPanel() {
               status: normalizePlanStatus(String(item.status || "pending")),
             }))
             .filter((item) => item.content);
+          if (
+            useAgentSettingsStore.getState().chatMode === "plan" ||
+            usePlanStore.getState().activePlan
+          ) {
+            void usePlanStore.getState().syncFromManagePlan(planItems, {
+              chatTabId: tabId,
+              goal: userVisible.slice(0, 120) || undefined,
+            });
+          }
           publish(null);
         } else if (
           event.type === "tool" &&
@@ -1757,6 +1787,61 @@ export function ChatPanel() {
           const dataUrl = `data:image/png;base64,${event.imageBase64}`;
           takeText(`\n![browser screenshot](${dataUrl})\n`);
           publish(null);
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "app_screenshot" &&
+          event.imageBase64
+        ) {
+          const dataUrl = `data:image/png;base64,${event.imageBase64}`;
+          const label = event.title
+            ? `app screenshot (${event.title})`
+            : "app screenshot";
+          takeText(`\n![${label}](${dataUrl})\n`);
+          publish(null);
+        } else if (event.type === "tool" && event.toolName === "app_session") {
+          if (event.attached) {
+            useDesktopAppStore.getState().setSession({
+              attached: true,
+              pid: typeof event.pid === "number" ? event.pid : null,
+              title: typeof event.title === "string" ? event.title : null,
+              path: typeof event.path === "string" ? event.path : null,
+            });
+          } else {
+            useDesktopAppStore.getState().clear();
+          }
+          publish(null);
+        } else if (event.type === "tool" && event.toolName === "sql_session") {
+          if (event.connected) {
+            useSqlSessionStore.getState().setSession({
+              connected: true,
+              engine:
+                event.engine === "mssql" || event.engine === "postgres"
+                  ? event.engine
+                  : null,
+              profileId:
+                typeof event.profileId === "string" ? event.profileId : null,
+              label: typeof event.label === "string" ? event.label : null,
+              database:
+                typeof event.database === "string" ? event.database : null,
+              readOnly: event.readOnly !== false,
+            });
+          } else {
+            useSqlSessionStore.getState().clear();
+            useSqlCatalogStore.getState().clear();
+          }
+          publish(null);
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "draft_support_ticket" &&
+          event.supportTicket &&
+          typeof event.supportTicket === "object"
+        ) {
+          void useSupportTicketStore
+            .getState()
+            .applyDraftFromAgent(
+              event.supportTicket as Record<string, unknown>,
+            );
+          publish(null);
         } else if (event.type === "done") {
           stream.adoptFinal(event.text);
           if (!browserOpenedThisTurn) {
@@ -1861,7 +1946,118 @@ export function ChatPanel() {
       runningRef.current = false;
       setRunningTabId(null);
       setRunning(false);
+      const plan = usePlanStore.getState().activePlan;
+      if (plan?.status === "running" || plan?.status === "failed") {
+        const outcome = deriveExecutionOutcome(plan);
+        if (outcome === "failed" && plan.status === "running") {
+          void usePlanStore.getState().completeExecute(false, "A step failed");
+        } else if (outcome === "completed" && plan.status === "running") {
+          void usePlanStore.getState().completeExecute(true);
+        } else if (plan.status === "running" && outcome === "running") {
+          // Turn ended mid-plan → auto-pause so Resume is available.
+          void usePlanStore.getState().pauseExecute();
+        }
+      }
     }
+  }
+
+  function enqueueTurn(turn: QueuedTurn) {
+    nameChatTabFromFirstMessage(turn.tabId, turn.userVisible);
+    if (runningRef.current) {
+      syncQueue([...queueRef.current, turn]);
+      return;
+    }
+    void drainQueue(turn);
+  }
+
+  async function enqueuePlanTurn(prompt: string, userVisible: string) {
+    if (!activeTab || isRunning) return;
+    setChatMode("agent");
+    const turn: QueuedTurn = {
+      id: crypto.randomUUID(),
+      tabId: activeTab.id,
+      promptBase: prompt,
+      userVisible,
+      otherNote: "",
+      displayImages: [],
+      attachments: [],
+      modelChoice: useChatStore.getState().preferredProvider || "auto",
+    };
+    enqueueTurn(turn);
+  }
+
+  async function executeActivePlan() {
+    if (!activeTab || isRunning) return;
+    const prompt = await usePlanStore.getState().beginExecute();
+    if (!prompt) return;
+    const title = usePlanStore.getState().activePlan?.title || "Plan";
+    await enqueuePlanTurn(prompt, `Execute plan: ${title}`);
+  }
+
+  const executeActivePlanRef = useRef(executeActivePlan);
+  executeActivePlanRef.current = executeActivePlan;
+
+  useEffect(() => {
+    async function onCloudExecute(ev: Event) {
+      const planId = String(
+        (ev as CustomEvent<{ planId?: string }>).detail?.planId || "",
+      ).trim();
+      if (!planId) return;
+      try {
+        const store = usePlanStore.getState();
+        if (store.activePlan?.id !== planId) {
+          await store.openPlan(planId);
+        }
+        const afterOpen = usePlanStore.getState();
+        const plan = afterOpen.activePlan;
+        if (!plan || plan.id !== planId) {
+          notify(
+            afterOpen.error ||
+              `Cloud Execute: plan ${planId} not found. Sign in + open workspace, or Pull plans from cloud.`,
+          );
+          return;
+        }
+        await executeActivePlanRef.current();
+      } catch (err) {
+        notify(
+          err instanceof Error ? err.message : "Cloud Execute handoff failed",
+        );
+      }
+    }
+    window.addEventListener("vigil:request-execute", onCloudExecute);
+    return () =>
+      window.removeEventListener("vigil:request-execute", onCloudExecute);
+  }, []);
+
+  async function pauseActivePlan() {
+    cancelRunning();
+    if (usePlanStore.getState().activePlan?.status === "running") {
+      await usePlanStore.getState().pauseExecute();
+    }
+  }
+
+  async function resumeActivePlan() {
+    if (!activeTab || isRunning) return;
+    const prompt = await usePlanStore.getState().resumeExecute();
+    if (!prompt) return;
+    const title = usePlanStore.getState().activePlan?.title || "Plan";
+    await enqueuePlanTurn(prompt, `Resume plan: ${title}`);
+  }
+
+  async function retryFailedPlanStep() {
+    if (!activeTab || isRunning) return;
+    const prompt = await usePlanStore.getState().retryFailed();
+    if (!prompt) return;
+    const title = usePlanStore.getState().activePlan?.title || "Plan";
+    await enqueuePlanTurn(prompt, `Retry plan step: ${title}`);
+  }
+
+  async function continueAfterPlanFailure() {
+    if (!activeTab || isRunning) return;
+    const prompt = await usePlanStore.getState().continueAfterFailure();
+    if (!prompt) return;
+    const title = usePlanStore.getState().activePlan?.title || "Plan";
+    await enqueuePlanTurn(prompt, `Continue plan: ${title}`);
   }
 
   async function onSubmit(e?: FormEvent | { preventDefault?: () => void }) {
@@ -1902,6 +2098,22 @@ export function ChatPanel() {
         ? `\n\n[Attachments: ${otherAttachments.map((a) => a.name).join(", ")}]`
         : "";
 
+    const settings = useAgentSettingsStore.getState();
+    if (
+      settings.chatMode === "agent" &&
+      settings.autoSuggestPlanMode &&
+      shouldSuggestPlanMode(draftText || userVisible)
+    ) {
+      const switchToPlan = window.confirm(
+        "يبدو إن المهمة كبيرة / متعددة الخطوات.\n\n" +
+          "تحب نحوّل لـ Plan mode ونخطط قبل التعديل؟\n\n" +
+          "This looks like a multi-step task. Switch to Plan mode first?",
+      );
+      if (switchToPlan) {
+        setChatMode("plan");
+      }
+    }
+
     const modelChoice = useChatStore.getState().preferredProvider || "auto";
     const turn: QueuedTurn = {
       id: crypto.randomUUID(),
@@ -1914,7 +2126,6 @@ export function ChatPanel() {
       modelChoice,
     };
 
-    nameChatTabFromFirstMessage(activeTab.id, userVisible);
     draftRef.current = "";
     setActiveDraft("");
     setAttachments([]);
@@ -1923,11 +2134,7 @@ export function ChatPanel() {
       ignoreDictationRef.current = false;
     }, 400);
 
-    if (runningRef.current) {
-      syncQueue([...queueRef.current, turn]);
-      return;
-    }
-    void drainQueue(turn);
+    enqueueTurn(turn);
   }
 
   function refreshAtMention(text: string, caret: number) {
@@ -1937,15 +2144,39 @@ export function ChatPanel() {
       return;
     }
     const raw = mention.query;
+    const tableMode =
+      /^table[:/]/i.test(raw) || /^db[:/]/i.test(raw);
     const symbolMode =
       raw.startsWith("symbol:") ||
       raw.startsWith("symbol/") ||
       raw.startsWith("#");
     const q = symbolMode
       ? raw.replace(/^(symbol:|symbol\/|#)/i, "")
-      : raw;
+      : tableMode
+        ? raw.replace(/^(table[:/]|db[:/])/i, "")
+        : raw;
     const explorer = useExplorerStore.getState();
     const indexStore = useWorkspaceIndexStore.getState();
+
+    if (tableMode || (!symbolMode && useSqlSessionStore.getState().connected && /^(t|ta|tab|tabl|table)/i.test(raw))) {
+      const catalog = useSqlCatalogStore.getState();
+      if (catalog.objects.length === 0 && useSqlSessionStore.getState().connected) {
+        void catalog.refresh();
+      }
+      const hits = catalog.search(q, 12).map(
+        (obj): AtMentionCandidate => ({
+          path: `__sql__:${obj.key}`,
+          name: obj.name,
+          isDir: false,
+          label: `@table:${obj.key}`,
+          score: 90,
+        }),
+      );
+      if (tableMode || hits.length) {
+        setAtMention({ mention, candidates: hits, index: 0 });
+        if (tableMode) return;
+      }
+    }
 
     if (!symbolMode) {
       const labels = {
@@ -2061,7 +2292,16 @@ export function ChatPanel() {
     draftRef.current = next;
     setActiveDraft(next);
     const root = useExplorerStore.getState().root;
-    if (candidate.virtualId) {
+    if (candidate.path.startsWith("__sql__:")) {
+      const key = candidate.path.slice("__sql__:".length);
+      const [schema, ...rest] = key.split(".");
+      const name = rest.join(".") || candidate.name;
+      useComposerContextStore.getState().addSqlTable({
+        schema: schema || "dbo",
+        name,
+        connectionLabel: useSqlSessionStore.getState().label,
+      });
+    } else if (candidate.virtualId) {
       useComposerContextStore.getState().addVirtual(candidate.virtualId);
     } else if (candidate.symbolLine) {
       useComposerContextStore.getState().addSymbol({
@@ -2235,6 +2475,17 @@ export function ChatPanel() {
       />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-3">
+        {chatMode === "plan" || activePlan ? (
+          <PlanPanel
+            onExecute={() => void executeActivePlan()}
+            onPause={() => void pauseActivePlan()}
+            onResume={() => void resumeActivePlan()}
+            onRetry={() => void retryFailedPlanStep()}
+            onContinue={() => void continueAfterPlanFailure()}
+            busy={isRunning}
+          />
+        ) : null}
+        <SupportTicketPanel />
         <div className="space-y-3">
           {messages.length === 0 && (
             <div className="rounded border border-dashed border-[var(--vigil-border)] p-3 text-xs text-[var(--vigil-muted)]">
@@ -2316,6 +2567,59 @@ export function ChatPanel() {
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
       >
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div
+            className="inline-flex rounded border border-[var(--vigil-border)] p-0.5 text-[11px]"
+            role="group"
+            aria-label="Chat mode"
+          >
+            {(
+              [
+                ["agent", "Agent", "Build and edit code"],
+                ["ask", "Ask", "Questions and discussion — no edits"],
+                [
+                  "plan",
+                  "Plan",
+                  "Investigate and draft a plan — writes blocked until Execute",
+                ],
+              ] as const
+            ).map(([mode, label, title]) => (
+              <button
+                key={mode}
+                type="button"
+                title={title}
+                className={`rounded px-2 py-0.5 ${
+                  chatMode === mode
+                    ? "bg-[var(--vigil-accent)] !text-white"
+                    : "text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+                }`}
+                onClick={() => {
+                  if (mode === chatMode) return;
+                  if (isRunning) {
+                    const ok = window.confirm(
+                      "في دور شغال دلوقتي. تغيير الوضع ممكن يوقف السياق الحالي.\n\n" +
+                        "A turn is running. Switch modes anyway?",
+                    );
+                    if (!ok) return;
+                  }
+                  setChatMode(mode);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {chatMode === "plan" ? (
+            <span className="text-[10px] text-[var(--vigil-muted)]">
+              Plan: قراءة/بحث فقط — مفيش كتابة لحد Execute
+            </span>
+          ) : null}
+          {chatMode === "ask" ? (
+            <span className="text-[10px] text-[var(--vigil-muted)]">
+              Ask: نقاش واستكشاف — بدون تعديل ملفات
+            </span>
+          ) : null}
+        </div>
         {toolApproval && (
           <div className="mb-2 rounded-md border border-[var(--vigil-accent)] bg-[var(--vigil-accent-soft)] p-2 text-xs">
             <div className="font-medium text-[var(--vigil-text)]">

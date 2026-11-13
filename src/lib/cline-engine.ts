@@ -58,6 +58,12 @@ export interface VigilEngineOptions {
   replyStyle?: string;
   /** When true, tools auto-run (yolo). Default false — UI must approve writes/commands. */
   autoRun?: boolean;
+  /** Plan mode: investigate/draft only until Execute unlocks writes. */
+  planMode?: boolean;
+  /** Ask mode: Q&A / discuss only — no edits. */
+  askMode?: boolean;
+  /** After user Approves & Executes an approved plan. */
+  planExecuteUnlocked?: boolean;
   /** Commands that auto-approve even when autoRun is false. */
   commandAllowlist?: string[];
   /** Paths that always require confirmation for writes. */
@@ -84,6 +90,16 @@ export type VigilStreamEvent =
       url?: string;
       title?: string;
       imageBase64?: string;
+      /** Desktop EXE session (app_session / app_screenshot). */
+      attached?: boolean;
+      pid?: number | null;
+      /** SQL Copilot session (sql_session). */
+      connected?: boolean;
+      engine?: string | null;
+      label?: string | null;
+      database?: string | null;
+      readOnly?: boolean;
+      profileId?: string | null;
       hook?: string;
       event?: unknown;
       planItems?: Array<{
@@ -99,6 +115,8 @@ export type VigilStreamEvent =
         error?: string;
         workdir?: string;
       }>;
+      /** Support Ticket Composer (`draft_support_ticket`). */
+      supportTicket?: Record<string, unknown>;
     }
   | {
       type: "tool_approval";
@@ -253,6 +271,9 @@ export async function* runVigilTask(
     checkpointAt: options.checkpointAt,
     replyStyle: options.replyStyle,
     autoRun: options.autoRun === true,
+    planMode: options.planMode === true,
+    askMode: options.askMode === true,
+    planExecuteUnlocked: options.planExecuteUnlocked === true,
     commandAllowlist: options.commandAllowlist ?? [],
     pathDenylist: options.pathDenylist ?? [],
   };

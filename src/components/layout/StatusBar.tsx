@@ -20,6 +20,8 @@ import { useExplorerStore } from "../../store/explorerStore";
 import { useLayoutStore } from "../../store/layoutStore";
 import { useTerminalStore } from "../../store/terminalStore";
 import { useWorkspaceIndexStore } from "../../store/workspaceIndexStore";
+import { useDesktopAppStore } from "../../store/desktopAppStore";
+import { useSqlSessionStore } from "../../store/sqlSessionStore";
 import { reindexLocalCodeIndex } from "../../lib/cline-engine";
 import { notify } from "../../lib/ide-commands";
 
@@ -71,6 +73,16 @@ export function StatusBar() {
   const semanticIndexing = useWorkspaceIndexStore((s) => s.semanticIndexing);
   const semantic = useWorkspaceIndexStore((s) => s.semantic);
   const indexError = useWorkspaceIndexStore((s) => s.error);
+  const desktopAttached = useDesktopAppStore((s) => s.attached);
+  const desktopTitle = useDesktopAppStore((s) => s.title);
+  const desktopPid = useDesktopAppStore((s) => s.pid);
+  const desktopPath = useDesktopAppStore((s) => s.path);
+  const clearDesktop = useDesktopAppStore((s) => s.clear);
+  const sqlConnected = useSqlSessionStore((s) => s.connected);
+  const sqlLabel = useSqlSessionStore((s) => s.label);
+  const sqlEngine = useSqlSessionStore((s) => s.engine);
+  const sqlDb = useSqlSessionStore((s) => s.database);
+  const clearSql = useSqlSessionStore((s) => s.clear);
   const [git, setGit] = useState<{ status: GitStatus; head: string | null } | null>(
     null,
   );
@@ -143,6 +155,40 @@ export function StatusBar() {
           <span className="max-w-[180px] truncate px-1.5" title={root}>
             {projectName(root)}
           </span>
+        )}
+        {desktopAttached && (
+          <button
+            type="button"
+            title={
+              desktopPath
+                ? `Desktop EXE attached · ${desktopPath}${desktopPid ? ` · pid ${desktopPid}` : ""}\nClick to clear status chip (ask agent app_close to quit the app)`
+                : `Desktop EXE attached${desktopPid ? ` · pid ${desktopPid}` : ""}`
+            }
+            className="flex h-[22px] max-w-[220px] shrink-0 items-center gap-1 rounded px-1.5 text-[var(--vigil-accent)] hover:bg-[var(--vigil-hover)]"
+            onClick={() => {
+              clearDesktop();
+              notify("Desktop session chip cleared. Ask the agent to app_close if the EXE is still open.");
+            }}
+          >
+            <span className="truncate">
+              EXE: {desktopTitle?.trim() || (desktopPid ? `pid ${desktopPid}` : "attached")}
+            </span>
+          </button>
+        )}
+        {sqlConnected && (
+          <button
+            type="button"
+            title={`SQL ${sqlEngine || ""} · ${sqlLabel || ""}${sqlDb ? ` · ${sqlDb}` : ""}\nClick to clear chip (ask agent sql_disconnect to close pool)`}
+            className="flex h-[22px] max-w-[220px] shrink-0 items-center gap-1 rounded px-1.5 text-[var(--vigil-accent)] hover:bg-[var(--vigil-hover)]"
+            onClick={() => {
+              clearSql();
+              notify("SQL session chip cleared. Ask the agent to sql_disconnect if still connected.");
+            }}
+          >
+            <span className="truncate">
+              SQL: {sqlLabel?.trim() || sqlEngine || "connected"}
+            </span>
+          </button>
         )}
         <button
           type="button"

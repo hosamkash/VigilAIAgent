@@ -48,6 +48,9 @@ export function createApprovalGate(emit, autoRun, policies = {}) {
   const pathDenylist = Array.isArray(policies.pathDenylist)
     ? policies.pathDenylist
     : [];
+  const planMode = policies.planMode === true;
+  const askMode = policies.askMode === true;
+  const planExecuteUnlocked = policies.planExecuteUnlocked === true;
 
   const gate = {
     get autoRun() {
@@ -73,9 +76,20 @@ export function createApprovalGate(emit, autoRun, policies = {}) {
         sessionAllow,
         commandAllowlist,
         pathDenylist,
+        planMode,
+        askMode,
+        planExecuteUnlocked,
       });
       if (decision === "allow") {
         return { approved: true };
+      }
+      if (decision === "deny") {
+        return {
+          approved: false,
+          reason: askMode
+            ? "Ask mode is on: read/discuss only — switch to Agent (or Plan→Execute) to edit files."
+            : "Plan mode is on: write/ship tools are blocked until you Approve & Execute the plan.",
+        };
       }
 
       const id = String(request.toolCallId || randomUUID());
@@ -176,6 +190,8 @@ export function buildToolPolicies(autoRun) {
     find_references: { enabled: true, autoApprove: true },
     parallel_investigate: { enabled: true, autoApprove: true },
     manage_plan: { enabled: true, autoApprove: true },
+    draft_support_ticket: { enabled: true, autoApprove: true },
+    list_support_tickets: { enabled: true, autoApprove: true },
     detect_project_scripts: { enabled: true, autoApprove: true },
     get_ci_status: { enabled: true, autoApprove: true },
     prepare_worktree: { enabled: true, autoApprove: false },
@@ -254,6 +270,66 @@ function summarizeApproval(toolName, input) {
   }
   if (toolName === "find_references") {
     return `Find references: ${String(obj.symbol || "symbol")}`;
+  }
+  if (toolName === "app_launch") {
+    return `Launch EXE: ${String(obj.profile || obj.path || "project")}`;
+  }
+  if (toolName === "app_attach") {
+    return `Attach EXE: ${obj.pid != null ? `pid ${obj.pid}` : String(obj.name || "app")}`;
+  }
+  if (toolName === "app_search_ui") {
+    return `Search UI: ${String(obj.query || "").slice(0, 48)}`;
+  }
+  if (toolName === "app_screenshot") {
+    return "Desktop app screenshot";
+  }
+  if (toolName === "app_screen_map") {
+    return "Crawl desktop app menus (screen map)";
+  }
+  if (toolName === "app_keys") {
+    return `Keys: ${String(obj.keys || "")}`;
+  }
+  if (toolName === "app_select") {
+    return `Select ${String(obj.value || "")} on ${String(obj.ref || "ref")}`;
+  }
+  if (toolName === "app_profiles_save") {
+    return `Save app profile: ${String(obj.name || obj.id || "profile")}`;
+  }
+  if (toolName === "app_close") {
+    return "Close desktop app";
+  }
+  if (toolName === "sql_connect") {
+    return `SQL connect: ${String(obj.profileId || obj.host || "db")}`;
+  }
+  if (toolName === "sql_test_connection") {
+    return `Test SQL: ${String(obj.profileId || obj.host || "db")}`;
+  }
+  if (toolName === "sql_run") {
+    return `SQL: ${String(obj.sql || "").slice(0, 64)}`;
+  }
+  if (toolName === "sql_profiles_save") {
+    return `Save DB profile: ${String(obj.name || obj.id || "profile")}`;
+  }
+  if (toolName === "sql_disconnect") {
+    return "SQL disconnect";
+  }
+  if (toolName === "draft_support_ticket") {
+    return `Draft ticket: ${String(obj.title || obj.id || "support")}`;
+  }
+  if (toolName === "list_support_tickets") {
+    return "List support tickets";
+  }
+  if (toolName === "sql_activity_live") {
+    return "SQL activity live snapshot";
+  }
+  if (toolName === "sql_capture_start") {
+    return "Start SQL activity capture";
+  }
+  if (toolName === "sql_capture_stop") {
+    return "Stop SQL activity capture";
+  }
+  if (toolName === "sql_capture_list") {
+    return "List SQL capture buffer";
   }
   return `${toolName}`;
 }

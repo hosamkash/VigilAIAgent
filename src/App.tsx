@@ -25,6 +25,7 @@ import { MenuBar } from "./components/layout/MenuBar";
 import { StatusBar } from "./components/layout/StatusBar";
 import { bindClipWorkspace, installClipCapture } from "./lib/clip-shelf";
 import { useExplorerStore } from "./store/explorerStore";
+import { useCloudAuthStore } from "./store/cloudAuthStore";
 
 function IdeShell() {
   const {
@@ -41,6 +42,10 @@ function IdeShell() {
   useEffect(() => {
     void destroyExtHostWebview();
     void destroyVigilEmbedWebview();
+  }, []);
+
+  useEffect(() => {
+    return useCloudAuthStore.getState().init();
   }, []);
 
   useEffect(() => {
@@ -181,6 +186,18 @@ function App() {
     if (params.get("agents") === "1") {
       useLayoutStore.setState({ sidebarVisible: false, bottomVisible: false });
     }
+    let stop: (() => void) | undefined;
+    void import("./lib/cloud/deep-link-boot")
+      .then(({ bootVigilDeepLinks }) => bootVigilDeepLinks())
+      .then((un) => {
+        stop = un;
+      })
+      .catch(() => {
+        /* offline / no Tauri */
+      });
+    return () => {
+      stop?.();
+    };
   }, [refreshLogs, initLayout]);
 
   let body = <IdeShell />;

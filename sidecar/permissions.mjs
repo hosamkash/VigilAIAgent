@@ -37,6 +37,17 @@ export function extractPath(input) {
   return "";
 }
 
+/** Tools blocked while Plan mode is on and Execute has not unlocked writes. */
+export const PLAN_MODE_WRITE_TOOLS = new Set([
+  "write_file",
+  "apply_patch",
+  "editor",
+  "create_pull_request",
+  "push_and_check_ci",
+  "prepare_worktree",
+  "delegate_tasks",
+]);
+
 /**
  * Decide whether a tool can auto-run under fine-grained policies.
  * @returns {"allow" | "deny" | "ask"}
@@ -48,6 +59,9 @@ export function permissionDecision({
   sessionAllow,
   commandAllowlist = [],
   pathDenylist = [],
+  planMode = false,
+  askMode = false,
+  planExecuteUnlocked = false,
 }) {
   const name = String(toolName || "");
   const writeLike =
@@ -58,6 +72,13 @@ export function permissionDecision({
     name === "run_commands" ||
     name === "run_command" ||
     name === "bash";
+
+  // Hard gate: Plan + Ask forbid mutating / shipping tools (Execute unlocks Plan only).
+  const blockWrites =
+    (planMode && !planExecuteUnlocked) || (askMode && !planExecuteUnlocked);
+  if (blockWrites && PLAN_MODE_WRITE_TOOLS.has(name)) {
+    return "deny";
+  }
 
   if (writeLike) {
     const path = extractPath(input);

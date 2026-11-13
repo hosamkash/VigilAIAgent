@@ -24,6 +24,12 @@ import {
   setConfiguredVigilDbPath,
 } from "../lib/vigil-db";
 import { ChatPreferencesFields } from "./ChatQuickSettings";
+import { CloudAccountSettings } from "./CloudAccountSettings";
+import { DesktopUiDriverCard } from "./DesktopUiDriverCard";
+import { SupportDbCard } from "./SupportDbCard";
+import { SupportActivityCard } from "./SupportActivityCard";
+import { SupportCatalogPanel } from "./SupportCatalogPanel";
+import { AdoSettingsCard } from "./AdoSettingsCard";
 import { useAgentSettingsStore } from "../store/agentSettingsStore";
 
 function AgentAutoRunSettings() {
@@ -93,7 +99,16 @@ const PROVIDERS: { id: ApiKeyProvider; label: string }[] = [
   { id: "anthropic", label: "Anthropic" },
 ];
 
-type SettingsPage = "appearance" | "chat" | "keys" | "database" | "usage";
+type SettingsPage =
+  | "account"
+  | "appearance"
+  | "chat"
+  | "keys"
+  | "database"
+  | "connections"
+  | "integrations"
+  | "desktop"
+  | "usage";
 
 const NAV: Array<{
   id: SettingsPage;
@@ -103,6 +118,24 @@ const NAV: Array<{
   soft: string;
   icon: ReactNode;
 }> = [
+  {
+    id: "account",
+    label: "Account",
+    hint: "Cloud Bridge login",
+    accent: "#0078d4",
+    soft: "rgba(0, 120, 212, 0.14)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <circle cx="12" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.7" />
+        <path
+          d="M5 19c1.5-3 4-4.5 7-4.5S17.5 16 19 19"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
   {
     id: "appearance",
     label: "Appearance",
@@ -181,6 +214,71 @@ const NAV: Array<{
     ),
   },
   {
+    id: "connections",
+    label: "DB Connections",
+    hint: "SQL Server / Postgres",
+    accent: "#038387",
+    soft: "rgba(3, 131, 135, 0.14)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <ellipse cx="12" cy="6" rx="7" ry="3" stroke="currentColor" strokeWidth="1.7" />
+        <path
+          d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"
+          stroke="currentColor"
+          strokeWidth="1.7"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "integrations",
+    label: "Integrations",
+    hint: "Azure DevOps tickets",
+    accent: "#0078d4",
+    soft: "rgba(0, 120, 212, 0.12)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <path
+          d="M7 7h10v10H7z"
+          stroke="currentColor"
+          strokeWidth="1.7"
+        />
+        <path
+          d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "desktop",
+    label: "Desktop apps",
+    hint: "Windows EXE testing",
+    accent: "#0078d4",
+    soft: "rgba(0, 120, 212, 0.14)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <rect
+          x="3.5"
+          y="4.5"
+          width="17"
+          height="12"
+          rx="1.5"
+          stroke="currentColor"
+          strokeWidth="1.7"
+        />
+        <path
+          d="M8 20h8M12 16.5V20"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
+  {
     id: "usage",
     label: "Usage",
     hint: "Cost & tokens",
@@ -215,7 +313,7 @@ export function SettingsPanel() {
   const [busy, setBusy] = useState(false);
   const [bioBusy, setBioBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState<SettingsPage>("appearance");
+  const [page, setPage] = useState<SettingsPage>("account");
   const [useBio, setUseBio] = useState(() => isBiometricEnabled());
   const [bioStatus, setBioStatus] = useState<BiometricStatus | null>(null);
   const [bioMsg, setBioMsg] = useState<string | null>(null);
@@ -451,6 +549,19 @@ export function SettingsPanel() {
                 Quick switch: Light / Dark / Ocean / Forest / Sunset. Preference
                 is saved locally for next launch.
               </div>
+            </div>
+          )}
+
+          {page === "account" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">Account</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  Unified Cloud Bridge — one Vigil login for desktop and web.
+                  Plans sync as text/steps only; your repo stays local.
+                </p>
+              </div>
+              <CloudAccountSettings />
             </div>
           )}
 
@@ -771,6 +882,46 @@ export function SettingsPanel() {
             </code>{" "}
             (History). Close a chat tab to archive it into VigilDB.
               </div>
+            </div>
+          )}
+
+          {page === "connections" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">DB Connections</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  Support / DB Copilot — اتصل بـ SQL Server أو PostgreSQL على LAN/VPN.
+                  البروفايل في <code>.vigil/db-profiles.json</code>، والباسورد محلي فقط.
+                </p>
+              </div>
+              <SupportDbCard />
+              <SupportCatalogPanel />
+              <SupportActivityCard />
+            </div>
+          )}
+
+          {page === "integrations" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">Azure DevOps</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  انشر تيكتات الدعم كـ Work Items عبر REST API (PAT الآن، Entra لاحقًا).
+                </p>
+              </div>
+              <AdoSettingsCard />
+            </div>
+          )}
+
+          {page === "desktop" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">Desktop apps</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  تثبيت محرك اختبار برامج ويندوز بضغطة زر — من غير أوامر تيرمينال.
+                  بعد ما يبقى «جاهز»، اطلب من الشات يفتح الـ EXE ويختبر الشاشات.
+                </p>
+              </div>
+              <DesktopUiDriverCard />
             </div>
           )}
 

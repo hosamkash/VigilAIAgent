@@ -5,6 +5,13 @@ import {
   browserTabTitle,
   normalizeBrowserUrl,
 } from "../lib/browser-url";
+import { getCloudIdToken } from "../lib/cloud/auth";
+import {
+  isVigilBridgeMessage,
+  isVigilWebOrigin,
+  VIGIL_BRIDGE_SOURCE,
+} from "../lib/cloud/desktop-bridge";
+import { getConfiguredVigilWebUrl } from "../lib/cloud/vigil-web-url";
 import { detectProjectPreviewUrl } from "../lib/project-url";
 import { destroyVigilEmbedWebview } from "../lib/vigil-embed-webview";
 import { syncVigilPreviewWindow } from "../lib/vigil-preview-window";
@@ -41,7 +48,46 @@ export function BrowserView({
   const historyRef = useRef<string[]>(initialUrl ? [initialUrl] : []);
   const indexRef = useRef(initialUrl ? 0 : -1);
   const urlRef = useRef(url);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   urlRef.current = url;
+
+  useEffect(() => {
+    async function replyAuthHandoff(targetOrigin: string) {
+      const idToken = await getCloudIdToken(true);
+      const frame = iframeRef.current?.contentWindow;
+      if (!frame || !idToken) return;
+      frame.postMessage(
+        {
+          source: VIGIL_BRIDGE_SOURCE,
+          type: "vigil:auth-handoff",
+          idToken,
+        },
+        targetOrigin,
+      );
+    }
+
+    function onMessage(event: MessageEvent) {
+      if (!isVigilBridgeMessage(event.data)) return;
+      const webBase = getConfiguredVigilWebUrl();
+      if (!webBase || !isVigilWebOrigin(event.origin, webBase)) return;
+
+      if (event.data.type === "vigil:auth-request") {
+        void replyAuthHandoff(event.origin);
+        return;
+      }
+
+      if (event.data.type === "vigil:request-execute") {
+        const planId = event.data.planId?.trim();
+        if (!planId) return;
+        window.dispatchEvent(
+          new CustomEvent("vigil:request-execute", { detail: { planId } }),
+        );
+      }
+    }
+
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   // Kill any leftover child-webview experiment that covers the chrome.
   useEffect(() => {
@@ -224,13 +270,34 @@ export function BrowserView({
         )}
         {url && (
           <iframe
+            ref={iframeRef}
             key={`${url}::${frameKey}`}
             title="Vigil Browser"
             src={url}
             className="block h-full w-full border-0 bg-white"
             sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts allow-downloads"
             referrerPolicy="no-referrer-when-downgrade"
-            onLoad={() => setLoading(false)}
+            onLoad={() => {
+              setLoading(false);
+              const webBase = getConfiguredVigilWebUrl();
+              if (!webBase || !url.includes("/embed/auth")) return;
+              try {
+                const origin = new URL(url).origin;
+                void getCloudIdToken(true).then((idToken) => {
+                  if (!idToken || !iframeRef.current?.contentWindow) return;
+                  iframeRef.current.contentWindow.postMessage(
+                    {
+                      source: VIGIL_BRIDGE_SOURCE,
+                      type: "vigil:auth-handoff",
+                      idToken,
+                    },
+                    origin,
+                  );
+                });
+              } catch {
+                /* ignore */
+              }
+            }}
             onError={() => setLoading(false)}
           />
         )}

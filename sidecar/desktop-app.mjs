@@ -18,8 +18,28 @@ let pending = [];
 let buffer = "";
 let starting = null;
 
+/** @type {{ attached: boolean, pid: number | null, title: string | null, path: string | null }} */
+let session = {
+  attached: false,
+  pid: null,
+  title: null,
+  path: null,
+};
+
 export function isWindowsDesktopHost() {
   return process.platform === "win32";
+}
+
+export function getDesktopSession() {
+  return { ...session };
+}
+
+function setSession(partial) {
+  session = { ...session, ...partial };
+}
+
+function clearSession() {
+  session = { attached: false, pid: null, title: null, path: null };
 }
 
 function windowsOnlyError() {
@@ -133,7 +153,6 @@ export async function detectDesktopAppExe(cwd = process.cwd()) {
         const full = path.join(d, e.name);
         if (e.isDirectory()) await inner(full, depth + 1);
         else if (/\.exe$/i.test(e.name) && !/\.(vshost|Test|Tests)\.exe$/i.test(e.name)) {
-          // Prefer non-driver exes
           if (/vigil-ui-driver/i.test(e.name)) continue;
           found.push(full);
         }
@@ -146,7 +165,6 @@ export async function detectDesktopAppExe(cwd = process.cwd()) {
   const all = await walk(root, 0);
   if (all.length === 0) return null;
 
-  // Prefer Release then Debug, newest path length as weak signal
   const scored = all.map((p) => {
     let score = 0;
     if (/\\Release\\/i.test(p) || /\/Release\//i.test(p)) score += 3;
@@ -156,6 +174,65 @@ export async function detectDesktopAppExe(cwd = process.cwd()) {
   });
   scored.sort((a, b) => b.score - a.score || a.p.localeCompare(b.p));
   return scored[0]?.p ?? null;
+}
+
+function profilesFile(cwd) {
+  return path.join(cwd, ".vigil", "app-profiles.json");
+}
+
+/**
+ * @param {string} cwd
+ * @returns {Promise<Array<{ id: string, name: string, path: string, args?: string, cwd?: string }>>}
+ */
+export async function listAppProfiles(cwd = process.cwd()) {
+  const file = profilesFile(cwd);
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed?.profiles) ? parsed.profiles : [];
+    return list.filter((p) => p && typeof p.path === "string" && p.path.trim());
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * @param {string} cwd
+ * @param {{ id?: string, name: string, path: string, args?: string, cwd?: string }} profile
+ */
+export async function saveAppProfile(cwd, profile) {
+  const name = String(profile?.name || "").trim();
+  const exePath = String(profile?.path || "").trim();
+  if (!name || !exePath) {
+    return { ok: false, error: "profile requires name and path" };
+  }
+  const id =
+    String(profile.id || "")
+      .trim()
+      .replace(/[^\w.-]+/g, "-")
+      .toLowerCase() ||
+    name
+      .toLowerCase()
+      .replace(/[^\w.-]+/g, "-")
+      .slice(0, 48) ||
+    `profile-${Date.now()}`;
+
+  const dir = path.join(cwd, ".vigil");
+  await fs.mkdir(dir, { recursive: true });
+  const file = profilesFile(cwd);
+  const existing = await listAppProfiles(cwd);
+  const next = {
+    id,
+    name,
+    path: exePath,
+    args: profile.args ? String(profile.args) : "",
+    cwd: profile.cwd ? String(profile.cwd) : "",
+  };
+  const idx = existing.findIndex((p) => p.id === id);
+  if (idx >= 0) existing[idx] = next;
+  else existing.push(next);
+  await fs.writeFile(file, `${JSON.stringify({ profiles: existing }, null, 2)}\n`, "utf8");
+  return { ok: true, output: `Saved profile ${id} (${name})`, profile: next };
 }
 
 function handleStdout(chunk) {
@@ -188,7 +265,9 @@ async function ensureDriver() {
       return {
         ok: false,
         error:
-          "vigil-ui-driver.exe not found. On Windows run:\n" +
+          "vigil-ui-driver.exe not found. In Vigil on Windows: open the Run sidebar " +
+          "(or Settings → Desktop apps) and click «تثبيت محرك الاختبار». " +
+          "Requires .NET 8 SDK once. Manual fallback:\n" +
           "  cd tools\\vigil-ui-driver\n" +
           "  dotnet publish -c Release -r win-x64 -o publish\n" +
           "Or set VIGIL_UI_DRIVER to the exe path.",
@@ -204,20 +283,16 @@ async function ensureDriver() {
     buffer = "";
 
     child.stdout.on("data", handleStdout);
-    child.stderr.on("data", (c) => {
-      // Surface driver stderr into the next error if useful
-      const text = c.toString("utf8").trim();
-      if (text) {
-        /* keep quiet unless a request fails */
-      }
+    child.stderr.on("data", () => {
+      /* keep quiet unless a request fails */
     });
     child.on("exit", () => {
       const err = { ok: false, error: "vigil-ui-driver exited" };
       while (pending.length) pending.shift().resolve(err);
       child = null;
+      clearSession();
     });
 
-    // First stdout line is the ready ping from the driver.
     const ready = await waitResponse(15_000);
     if (!ready?.ok) {
       try {
@@ -267,8 +342,44 @@ export async function appRequest(payload, timeoutMs = 60_000) {
   return waiter;
 }
 
+function rememberFromResult(result, fallbackPath = null) {
+  if (!result?.ok) return result;
+  setSession({
+    attached: true,
+    pid: typeof result.pid === "number" ? result.pid : session.pid,
+    title: typeof result.title === "string" ? result.title : session.title,
+    path:
+      typeof result.path === "string"
+        ? result.path
+        : fallbackPath || session.path,
+  });
+  return result;
+}
+
 export async function app_launch(input = {}, cwd = process.cwd()) {
   let exePath = input.path || input.exe;
+  let args = input.args || "";
+  let workDir = input.cwd || input.workingDirectory || "";
+
+  const profileKey = String(input.profile || input.profileId || "").trim();
+  if (profileKey) {
+    const profiles = await listAppProfiles(cwd);
+    const hit = profiles.find(
+      (p) =>
+        p.id === profileKey ||
+        p.name.toLowerCase() === profileKey.toLowerCase(),
+    );
+    if (!hit) {
+      return {
+        ok: false,
+        error: `Unknown app profile '${profileKey}'. Use app_profiles_list.`,
+      };
+    }
+    exePath = hit.path;
+    args = hit.args || args;
+    workDir = hit.cwd || workDir;
+  }
+
   if (!exePath || String(exePath).trim().toLowerCase() === "project") {
     exePath = await detectDesktopAppExe(cwd);
     if (!exePath) {
@@ -276,24 +387,102 @@ export async function app_launch(input = {}, cwd = process.cwd()) {
         ok: false,
         error:
           "Could not find a built .exe under the workspace. Build the WinForms app, " +
-          "or pass path to the .exe.",
+          "or pass path / profile to the .exe.",
       };
     }
   }
   const abs = path.isAbsolute(exePath) ? exePath : path.resolve(cwd, exePath);
-  return appRequest({ op: "launch", path: abs, args: input.args || "" }, 90_000);
+  const result = await appRequest(
+    {
+      op: "launch",
+      path: abs,
+      args: args || "",
+      cwd: workDir || undefined,
+    },
+    90_000,
+  );
+  return rememberFromResult(result, abs);
 }
 
 export async function app_attach(input = {}) {
-  return appRequest({
+  const result = await appRequest({
     op: "attach",
     pid: input.pid,
     name: input.name || input.processName,
   });
+  return rememberFromResult(result);
 }
 
 export async function app_snapshot(input = {}) {
   return appRequest({ op: "snapshot", max: input.max ?? 100 });
+}
+
+export async function app_search_ui(input = {}) {
+  return appRequest({
+    op: "search",
+    query: input.query || input.q || "",
+    max: input.max ?? 40,
+  });
+}
+
+export async function app_screenshot(input = {}, emit) {
+  const result = await appRequest({ op: "screenshot" }, 30_000);
+  if (result?.ok && result.imageBase64 && typeof emit === "function") {
+    emit({
+      type: "tool",
+      toolName: "app_screenshot",
+      imageBase64: result.imageBase64,
+      title: result.title,
+      pid: result.pid,
+    });
+  }
+  if (result?.ok) {
+    rememberFromResult({
+      ok: true,
+      pid: result.pid,
+      title: result.title,
+    });
+  }
+  return result;
+}
+
+export async function app_select(input = {}) {
+  return appRequest({
+    op: "select",
+    ref: input.ref,
+    value: input.value ?? input.text ?? "",
+  });
+}
+
+export async function app_keys(input = {}) {
+  return appRequest({
+    op: "keys",
+    keys: input.keys ?? input.text ?? "",
+  });
+}
+
+export async function app_list_windows() {
+  return appRequest({ op: "windows" });
+}
+
+export async function app_focus_window(input = {}) {
+  return appRequest({
+    op: "focus_window",
+    index: input.index,
+    title: input.title || input.name,
+  });
+}
+
+export async function app_screen_map(input = {}) {
+  return appRequest(
+    {
+      op: "screen_map",
+      maxMenus: input.maxMenus,
+      maxItems: input.maxItems,
+      timeoutMs: input.timeoutMs,
+    },
+    Math.max(90_000, Number(input.timeoutMs) || 60_000) + 10_000,
+  );
 }
 
 export async function app_click(input = {}) {
@@ -334,5 +523,31 @@ export async function app_close() {
     /* */
   }
   child = null;
+  clearSession();
   return result;
+}
+
+export async function app_profiles_list(cwd = process.cwd()) {
+  const profiles = await listAppProfiles(cwd);
+  if (profiles.length === 0) {
+    return {
+      ok: true,
+      output:
+        "No saved app profiles. Use app_profiles_save, or launch with path/'project'.",
+      profiles: [],
+    };
+  }
+  const lines = profiles.map(
+    (p) =>
+      `- ${p.id}: ${p.name}\n  path: ${p.path}${p.args ? `\n  args: ${p.args}` : ""}${p.cwd ? `\n  cwd: ${p.cwd}` : ""}`,
+  );
+  return {
+    ok: true,
+    output: lines.join("\n"),
+    profiles,
+  };
+}
+
+export async function app_profiles_save(input = {}, cwd = process.cwd()) {
+  return saveAppProfile(cwd, input);
 }

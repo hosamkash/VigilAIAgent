@@ -47,6 +47,11 @@
   "plugins": {
     "sql": {
       "preload": ["sqlite:vigil.db"]
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["vigil"]
+      }
     }
   }
 }

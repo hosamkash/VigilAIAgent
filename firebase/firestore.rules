@@ -1,0 +1,132 @@
+rules_version = '2';
+
+// Vigil Cloud Bridge — Phase 1 rules (own-data).
+// Deploy with Firebase CLI when the Vigil project is provisioned.
+// Never allow arbitrary clients to write packages/payments without Admin SDK.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function noCodeUploadKeys() {
+      // Reject documents that try to smuggle source trees / indexes.
+      return !request.resource.data.keys().hasAny([
+        'sourceTree',
+        'gitObjects',
+        'codeIndex',
+        'fileContents',
+        'workspaceFiles',
+        'deepIndex',
+        'repoZip',
+        'binaryBlob'
+      ]);
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && noCodeUploadKeys();
+      allow update: if isOwner(userId) && noCodeUploadKeys();
+      allow delete: if false;
+    }
+
+    match /wallets/{userId} {
+      allow read: if isOwner(userId);
+      // Wallet mutations go through trusted Cloud Functions later.
+      allow write: if false;
+    }
+
+    match /packages/{packageId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /subscriptions/{subId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /payments/{paymentId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /usageEvents/{eventId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && noCodeUploadKeys();
+      allow update, delete: if false;
+    }
+
+    match /chats/{chatId} {
+      // Continuum: desktop uses userId; legacy web may use uid only.
+      allow read, update, delete: if signedIn()
+        && (resource.data.userId == request.auth.uid
+          || resource.data.uid == request.auth.uid);
+      allow create: if signedIn()
+        && (request.resource.data.userId == request.auth.uid
+          || request.resource.data.uid == request.auth.uid)
+        && noCodeUploadKeys();
+    }
+
+    match /messages/{messageId} {
+      allow read, delete: if signedIn()
+        && (resource.data.userId == request.auth.uid
+          || resource.data.uid == request.auth.uid);
+      allow create: if signedIn()
+        && (request.resource.data.userId == request.auth.uid
+          || request.resource.data.uid == request.auth.uid)
+        && noCodeUploadKeys();
+      allow update: if signedIn()
+        && (resource.data.userId == request.auth.uid
+          || resource.data.uid == request.auth.uid)
+        && noCodeUploadKeys();
+    }
+
+    match /plans/{planId} {
+      allow read, update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && noCodeUploadKeys();
+    }
+
+    match /projects/{projectId} {
+      allow read, update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && noCodeUploadKeys();
+    }
+
+    match /libraryItems/{itemId} {
+      allow read, update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && noCodeUploadKeys();
+    }
+
+    match /devices/{deviceId} {
+      allow read, update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && noCodeUploadKeys();
+    }
+
+    match /schedules/{scheduleId} {
+      allow read, update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && noCodeUploadKeys();
+    }
+  }
+}

@@ -40,4 +40,63 @@ describe("permissionDecision", () => {
       }),
     ).toBe("ask");
   });
+
+  it("denies write tools in Plan mode until Execute unlock", () => {
+    expect(
+      permissionDecision({
+        toolName: "write_file",
+        input: { path: "src/a.ts", content: "x" },
+        autoRun: true,
+        sessionAllow: true,
+        planMode: true,
+        planExecuteUnlocked: false,
+      }),
+    ).toBe("deny");
+    expect(
+      permissionDecision({
+        toolName: "apply_patch",
+        input: {},
+        autoRun: true,
+        sessionAllow: true,
+        planMode: true,
+        planExecuteUnlocked: false,
+      }),
+    ).toBe("deny");
+    expect(
+      permissionDecision({
+        toolName: "search_codebase",
+        input: { query: "plan" },
+        autoRun: false,
+        sessionAllow: false,
+        planMode: true,
+        planExecuteUnlocked: false,
+      }),
+    ).toBe("ask");
+  });
+
+  it("allows writes in Plan mode after Execute unlock", () => {
+    expect(
+      permissionDecision({
+        toolName: "write_file",
+        input: { path: "src/a.ts", content: "x" },
+        autoRun: true,
+        sessionAllow: true,
+        planMode: true,
+        planExecuteUnlocked: true,
+      }),
+    ).toBe("allow");
+  });
+
+  it("denies write tools in Ask mode", () => {
+    expect(
+      permissionDecision({
+        toolName: "apply_patch",
+        input: {},
+        autoRun: true,
+        sessionAllow: true,
+        askMode: true,
+        planExecuteUnlocked: false,
+      }),
+    ).toBe("deny");
+  });
 });

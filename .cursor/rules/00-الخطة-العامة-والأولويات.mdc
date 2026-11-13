@@ -37,11 +37,11 @@ alwaysApply: true
 1. Pick the next unchecked item under **Next up** or the highest-priority open wave.
 2. Implement the slice; keep VigilHub (`…/VigilHub/VigilHub`) as **reference only**.
 3. Run tests (`npm test`) and a focused typecheck when UI/TS changed (`npx tsc --noEmit`).
-4. Only after green: mark the item `[x]`, move notes to **Done**, and refresh **Next up**.
+4. Only after green: mark the item `✅`, move notes to **Done**, and refresh **Next up**.
 5. If mid-work you discover a gap, bug, or new advanced need → **add it here immediately** (under the right wave or **Discovered during work**). Do not rely on chat memory alone.
 6. Do **not** commit unless the user asks.
 
-**Status legend:** `[x]` done · `[~]` partial / needs polish · `[ ]` not started
+**Status legend:** `✅` done · `🟨` partial / needs polish · `[ ]` not started
 
 ---
 
@@ -65,56 +65,56 @@ alwaysApply: true
 > **عربي:** قسم — Wave A — Cursor parity / Pro Agent / Project Brain / Heavy loop / Ops
 
 ### Wave A — Cursor parity / Pro Agent / Project Brain / Heavy loop / Ops
-- [x] Pro agent loop (tools, approvals, auto-run, plan card)
-- [x] Project brain: workspace file/symbol index, `@` mentions, project rules (`.vigil`)
-- [x] Heavy agent loop: test gate, manage_plan, checkpoints
-- [x] Ops: worktrees, `create_pull_request`, `get_ci_status` (gh)
-- [x] Editor “Add to Chat” selection chip
+- ✅ Pro agent loop (tools, approvals, auto-run, plan card)
+- ✅ Project brain: workspace file/symbol index, `@` mentions, project rules (`.vigil`)
+- ✅ Heavy agent loop: test gate, manage_plan, checkpoints
+- ✅ Ops: worktrees, `create_pull_request`, `get_ci_status` (gh)
+- ✅ Editor “Add to Chat” selection chip
 
 > **عربي:** قسم — Wave B — Semantic Local Index → Deep Index
 
 ### Wave B — Semantic Local Index → Deep Index
-- [x] Disk index under `.vigil/code-index.json` (v2)
-- [x] AST-ish chunks + import graph (`sidecar/ast-extract.mjs`, `code-index.mjs`)
-- [x] BM25 + local hashed embeddings hybrid search (`bm25.mjs`, `local-embed.mjs`)
-- [x] Incremental sync by file hash; upsert on save / write_file / apply_patch
-- [x] `search_codebase` hybrid + project map for broad queries
-- [x] Status bar Deep index + rebuild click
-- [x] Tests for BM25 / index / embeds / AST
+- ✅ Disk index under `.vigil/code-index.json` (v2)
+- ✅ AST-ish chunks + import graph (`sidecar/ast-extract.mjs`, `code-index.mjs`)
+- ✅ BM25 + local hashed embeddings hybrid search (`bm25.mjs`, `local-embed.mjs`)
+- ✅ Incremental sync by file hash; upsert on save / write_file / apply_patch
+- ✅ `search_codebase` hybrid + project map for broad queries
+- ✅ Status bar Deep index + rebuild click
+- ✅ Tests for BM25 / index / embeds / AST
 
 > **عربي:** قسم — Wave C — LSP-lite (agent-side language graph)
 
 ### Wave C — LSP-lite (agent-side language graph)
-- [x] `find_definition` / `find_references` (`sidecar/lang-graph.mjs`)
-- [x] Wired into tools + approvals + system prompt
-- [x] Monaco loads more TS models for cross-file checks (~220)
+- ✅ `find_definition` / `find_references` (`sidecar/lang-graph.mjs`)
+- ✅ Wired into tools + approvals + system prompt
+- ✅ Monaco loads more TS models for cross-file checks (~220)
 
 > **عربي:** قسم — Wave D — Parallel local power + CI loop
 
 ### Wave D — Parallel local power + CI loop
-- [x] `delegate_tasks` (nested leaf subagents, concurrency 2–3, optional worktrees)
-- [x] `parallel_investigate` (fan-out search/defs/refs, no nested LLM)
-- [x] `push_and_check_ci` + richer CI failure text
-- [x] Delegates surfaced in chat plan/delegates UI
-- [x] Tests for parallel pool / normalize tasks
+- ✅ `delegate_tasks` (nested leaf subagents, concurrency 2–3, optional worktrees)
+- ✅ `parallel_investigate` (fan-out search/defs/refs, no nested LLM)
+- ✅ `push_and_check_ci` + richer CI failure text
+- ✅ Delegates surfaced in chat plan/delegates UI
+- ✅ Tests for parallel pool / normalize tasks
 
 > **عربي:** قسم — Wave E — Inline Edit + long-session memory
 
 ### Wave E — Inline Edit + long-session memory
-- [x] Inline Edit Cmd/Ctrl+K + selection **Edit** chip (`inline-edit`, `InlineEditPopover`)
-- [x] Chat history compaction for agent turns (`chat-context-compact.ts`)
-- [x] Tab buffer sync after Monaco `executeEdits` (dirty/save correctness)
+- ✅ Inline Edit Cmd/Ctrl+K + selection **Edit** chip (`inline-edit`, `InlineEditPopover`)
+- ✅ Chat history compaction for agent turns (`chat-context-compact.ts`)
+- ✅ Tab buffer sync after Monaco `executeEdits` (dirty/save correctness)
 
 > **عربي:** قسم — Wave F — Integration polish (gap fixes)
 
 ### Wave F — Integration polish (gap fixes)
-- [x] Deep index status survives incremental touch (`refreshSemanticStatus`)
-- [x] Agent `code_index=` / reindex refreshes StatusBar store
-- [x] `push_and_check_ci` notes appear in chat (like `get_ci_status`)
-- [x] Failed delegates show as **Failed** (not Cancelled)
-- [x] Approval summaries for new tools
-- [x] `@codebase` includes deep index stats
-- [x] Approval policy tests cover delegates / push / LSP-lite tools
+- ✅ Deep index status survives incremental touch (`refreshSemanticStatus`)
+- ✅ Agent `code_index=` / reindex refreshes StatusBar store
+- ✅ `push_and_check_ci` notes appear in chat (like `get_ci_status`)
+- ✅ Failed delegates show as **Failed** (not Cancelled)
+- ✅ Approval summaries for new tools
+- ✅ `@codebase` includes deep index stats
+- ✅ Approval policy tests cover delegates / push / LSP-lite tools
 
 **Verification baseline (re-run after big merges):** `npm test` → expect **210+** passing; `npx tsc --noEmit` clean.
 
@@ -124,8 +124,8 @@ alwaysApply: true
 
 ## Planning hold
 
-**Do not start coding new waves until the user says execution may begin.**  
-While planning: append ideas to this file and/or `01-وضع-التخطيط-Plan-Mode.mdc` only.
+**Status:** EXECUTING (user started 2026-11-12).  
+While executing: implement slices from Next up #1 (`01-وضع-التخطيط-Plan-Mode.mdc`) first; check `✅` here and in the focus spec after each green slice.
 
 ---
 
@@ -141,34 +141,34 @@ While planning: append ideas to this file and/or `01-وضع-التخطيط-Plan-
 **Full focused spec:** `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc` (always read/update that file for Plan Mode details).
 
 High-level checklist (details + Cursor improvements live in the spec):
-- [ ] Plan mode vs Agent mode in UI + write-gate before Execute
-- [ ] Structured Plan artifact (persist, edit, reorder, approve)
-- [ ] Execute walks approved steps with live statuses; pause/resume/fail recovery
-- [ ] Anti-drift + acceptance checks; index-grounded step hints
-- [ ] Beat Cursor: true editability, persistence, citations, parallel/ops-aware steps
-- [ ] Tests: persistence, write-gate, status transitions
+- ✅ Agent | Ask | Plan modes in UI + write-gate (Ask+Plan; Execute unlocks Plan)
+- ✅ Structured Plan artifact (persist + PlanPanel edit/reorder/approve + Execute)
+- ✅ Execute walks approved steps with live statuses; pause/resume/fail recovery
+- ✅ Anti-drift + acceptance/optional/parallel/hints polish; History list reopen/clone/archive
+- ✅ Close-out: mid-run mode confirm, auto-suggest Plan, chatTabId, revisions, ops/AR-EN UI
+- ✅ **Plan Mode desktop v1 CLOSED** — see `01` Status DONE; cloud SoR → item #2
 
-**Exit criteria:** See §8 Acceptance criteria in `01-وضع-التخطيط-Plan-Mode.mdc`.
+**Exit criteria:** See §8 Acceptance criteria in `01-وضع-التخطيط-Plan-Mode.mdc` — **met**.
 
 > **عربي:** قسم — 2) Unified Cloud Bridge (web Admin/User + Firestore-first continuum) — CRITICAL DIFFERENTIATOR
 
 ### 2) Unified Cloud Bridge (web Admin/User + Firestore-first continuum) — CRITICAL DIFFERENTIATOR
 **Why:** Discuss on phone/web → same history & Plan → desktop Execute without re-briefing. Cursor is weak here; Vigil can own this.  
 **Data principle:** **Firestore is the base / SoR (cloud online).** Local VigilDB sync is **optional cache only** — not the product foundation.  
-**Phase 1 status:** **Not built in VigilAIAgent yet.**  
+**Phase 1 status:** **EXECUTING** — auth + schema foundation shipped in desktop.  
 **Full focused specs:**  
 - Continuum / desktop side: `.cursor/rules/02-جسر-السحابة-الموحد.mdc`  
 - **Separate Vigil Web repo contract (portable):** `.cursor/rules/03-عقد-مشروع-الويب.mdc` — copy into the web project when that work starts
 
 High-level checklist:
-- [ ] Firebase Auth shared (web + desktop); Firestore-first chats/plans/usage
-- [ ] Admin dashboard: customers, packages, subscriptions, wallets, usage
-- [ ] User web ChatGPT-like shell: sidebar (New Chat, Search, Recents, Projects, Library, Plans, Schedule, Usage, …)
-- [ ] Desktop **hosts/embeds** same Vigil Web (carbon-copy history UX) + local Execute
+- 🟨 Firebase Auth shared (desktop + web Firebase; same project)
+- 🟨 Admin dashboard: customers/packages + **attach package** + payments ledger + seed free/trial/Pro
+- 🟨 User web shell: streaming chat + Plan edit + **Usage/Wallet + Pricing Egypt sandbox**
+- 🟨 Desktop login + Cloud embed; auth bridge + Execute + **plan pull**; **chat hydrate on auth restore** + embed auto-open
 - [ ] Optional local cache (default not required for happy path)
-- [ ] Unified multi-model metering on one subscription
-- [ ] Never upload project source files to Firestore
-- [ ] Tests/rules for SoR + embed + no-code-upload guardrail
+- 🟨 Unified multi-model metering on one subscription (web usageEvents + spendTokens; wallet SoR continues)
+- ✅ Never upload project source files to Firestore (guard + rules)
+- 🟨 Tests/rules for SoR + no-code-upload; embed tests later
 
 **Exit criteria:** See §10 in `02-جسر-السحابة-الموحد.mdc` + §9 in `03-عقد-مشروع-الويب.mdc`.  
 **Depends on:** Plan Mode artifact shape stable enough to sync (#1).
@@ -180,14 +180,14 @@ High-level checklist:
 **Full focused spec:** `.cursor/rules/04-دعم-فني-وقواعد-البيانات.mdc`
 
 High-level checklist:
-- [ ] Connect UX: host/IP, auth, SQL Server + Postgres
-- [ ] Catalog browser (DBs → tables/views/columns/procs)
-- [ ] Read-only default + gated `run_sql`; agent tools grounded in live schema
-- [ ] **Support Tickets** composer (structured handoff for developers)
-- [ ] **Azure DevOps** publish via Work Items REST API (Entra OAuth / PAT per engineer)
+- ✅ Connect UX: host/IP, auth, SQL Server + Postgres (Settings + Run sidebar; `.vigil/db-profiles.json` + local password vault)
+- ✅ Catalog via agent tools + **visual catalog panel** + `@table` chat chips
+- ✅ Read-only default + gated `sql_run`; agent tools grounded in live schema
+- 🟨 **Support Tickets** composer (local `.vigil/tickets/` + panel + `draft_support_ticket`; Firestore sync later)
+- 🟨 **Azure DevOps** publish via Work Items REST API — **PAT** path shipped (Entra OAuth later)
 - [ ] Web Support mode entry; secrets never in Firestore
 - [ ] Report binder (Crystal ↔ SQL), broken-report wizard, team report catalog
-- [ ] **SQL Activity Capture (“Vigil Profiler”)** — DMVs/XEvents; capture-on-EXE-click; no external Profiler
+- 🟨 **SQL Activity Capture (“Vigil Profiler”)** — DMV/pg_stat live + Start/Stop window; XEvents + EXE auto-correlate later
 - [ ] Support delight: favorites, history, glossary, playbooks, env diff
 - [ ] PM workspace: digests, meeting→actions, ADO snapshot, client updates
 - [ ] Later: Jira/GitHub adapters, write mode, deeper Crystal parse, dialect translation
@@ -203,10 +203,10 @@ High-level checklist:
 **Full focused spec (complete dream contract):** `.cursor/rules/05-اختبار-برامج-EXE-ويندوز.mdc` — do not implement from memory; that file holds tools, screen map, OCR, replay, Support/Plan/DB glue, remote Windows, etc.
 
 High-level checklist:
-- [ ] Installed-path launch + attach polish + app profiles
-- [ ] Screen-map / “find screen that does X” playbook from UIA snapshots
-- [ ] `app_screenshot` + desktop session UI chrome
-- [ ] Extra tools: select/keys/search/windows; OCR fallback; WPF smoke
+- ✅ Launch/attach polish + app profiles (`.vigil/app-profiles.json`) + one-click driver install UI
+- ✅ `app_search_ui` + discovery playbook; `app_screenshot` + StatusBar session chip
+- ✅ `app_screen_map` + `app_select` / `app_keys` / windows/focus
+- [ ] OCR fallback; WPF smoke; DevExpress grid/ribbon polish
 - [ ] Record/replay; glue to Support tickets / Plan verify / DB Copilot
 - [ ] Later: remote Windows worker, دليل الشاشات export
 
@@ -357,6 +357,33 @@ Example:
 - 2026-11-11: **Desktop EXE Runtime** revisited — FlaUI `app_*` MVP exists; runtime screen discovery without source = yes via UIA; finish map/screenshot/installed launch — spec `05-اختبار-برامج-EXE-ويندوز.mdc`.
 - 2026-11-11: **Vigil Profiler** idea locked — SQL Activity Capture via DMVs/Extended Events + correlate with EXE click; avoid classic Profiler/SPID ritual for support (`04-دعم-فني-وقواعد-البيانات.mdc` §5.1).
 - 2026-11-11: **Vigil Secure** — defensive web security assistant (authorized targets only); Browser test→fix→retest; sellable Secure Report add-on/SKU; spec `06-الأمان-الدفاعي-للويب.mdc`.
+- 2026-11-12: **EXECUTING** started — Plan Mode slices 1–2 shipped (artifact + `.vigil/plans` + Plan|Agent toggle + sidecar write-gate).
+- 2026-11-12: Chat modes = **Agent | Ask | Plan** (Cursor Ask parity). Multi/Multitask = later via `delegate_tasks` / parallel plan build — not a v1 primary tab.
+- 2026-11-12: Plan Mode slices 3–4 shipped — `PlanPanel` (edit/reorder/approve) + Execute unlocks writes (`planExecuteUnlocked`) + `manage_plan` sync into artifact.
+- 2026-11-12: Plan Mode slice 5 — execution loop: seed `in_progress`, merge by id, enforce one active step, drift banner, live progress in PlanPanel.
+- 2026-11-12: Plan Mode slice 6 — `paused` status, Pause/Resume, chat-Stop→pause, turn-end auto-pause, fail recovery (Retry / Skip & continue / Revise).
+- 2026-11-12: Plan Mode slices 7–8 — History (reopen/clone/archive/delete) + polish (optional, acceptance, parallelizable, hints, dangerous flags, expandable details).
+- 2026-11-12: **Plan Mode file `01` CLOSED** — close-out heuristics + zero open desktop checkboxes; Firestore/Multi explicitly → `02` / §11.
+- 2026-11-12: Cloud Bridge slice 1 — Firebase Auth/env, Firestore types+rules, Settings Account, plan cloud push, no-code-upload guard.
+- 2026-11-12: Cloud Bridge slice 1b — chat/messages push, usageEvents, devices on login.
+- 2026-11-12: Cloud Bridge slice 1c — pull chats from cloud into local history.
+- 2026-11-12: Desktop EXE Phase A — driver install button, `app_screenshot` / `app_search_ui` / profiles, StatusBar chip.
+- 2026-11-12: Desktop EXE Phase B core — `app_screen_map`, `app_select`, `app_keys`, windows/focus.
+- 2026-11-12: Cloud Bridge embed shell — `view.cloud`, Account URL + `?embed=1` (needs hosted Vigil Web).
+- 2026-11-12: Merged Vigil Web `01`+`03`+local `/app` shell; repo path locked; desktop default embed `127.0.0.1:3000`.
+- 2026-11-12: Vigil Web streaming chat — `/api/chat` SSE + ChatRoom; persist chats/messages + usageEvents; LLM via Admin providers.
+- 2026-11-12: Vigil Web Plan editor — edit/reorder/optional/acceptance + Approve via `PATCH /api/plans/:id`.
+- 2026-11-12: Vigil Web Admin attachPackage + seed packages; Usage/Wallet gate; Pricing Egypt methods + soft chat block on empty/expired.
+- 2026-11-12: Payments abstraction + auto-expire pending; Schedule stub; chat star/archive.
+- 2026-11-12: **Kashier Test** wired in Vigil Web (MID in `.env.local`; webhook HMAC; needs `VIGIL_PUBLIC_URL`).
+- 2026-11-12: Desktop **plan pull from Firestore** on openPlan + Account hydrate — fixes web-approve → Execute.
+- 2026-11-12: Web Projects detail/assign + Search messages (continuum shell polish).
+- 2026-11-12: Continuum priority pack — `vigil://` Continue on Desktop, PlanLiveStatus, desktop tokenBalance debit.
+- 2026-11-12: **Support/DB Phase 1 core** — mssql+pg connector, profiles, local password vault, `sql_*` tools, read-only gate, SupportDbCard + StatusBar chip.
+- 2026-11-12: **Support Ticket Composer** — `.vigil/tickets/`, `draft_support_ticket` / `list_support_tickets`, SupportTicketPanel + Run sidebar entry.
+- 2026-11-12: **ADO PAT + Vigil Profiler DMV** — Integrations publish; `sql_activity_*` capture.
+- 2026-11-12: **Firestore continuum Wave A** — auth-restore hydrate, uid+userId+ms, smarter merge, web iso(ms), push on close, embed auto-open; EXE deferred.
+- 2026-11-12: **Support catalog UI** — SupportCatalogPanel + `@table` composer chips.
 
 ---
 
@@ -376,16 +403,16 @@ Example:
 
 ## Current focus pointer
 
-**Phase:** PLANNING (no implementation until user says start)  
+**Phase:** EXECUTING  
+**Active implementation:** Web↔Desktop Firestore continuum (same history) — Wave A; EXE **deferred**  
+**Last tests:** cloud-hydrate + chat-cloud + continuum (2026-11-12)
 **Active focus docs:**  
-- `1) Plan Mode` → `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc`  
-- `2) Unified Cloud Bridge` → `.cursor/rules/02-جسر-السحابة-الموحد.mdc`  
-- `2b) Vigil Web (separate repo contract)` → `.cursor/rules/03-عقد-مشروع-الويب.mdc`  
-- `2c) Support / DB Copilot` → `.cursor/rules/04-دعم-فني-وقواعد-البيانات.mdc`  
-- `2d) Desktop EXE Runtime` → `.cursor/rules/05-اختبار-برامج-EXE-ويندوز.mdc` (MVP partial)  
+- `1) Plan Mode` → `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc` ← **✅ CLOSED**  
+- `2) Unified Cloud Bridge` → `.cursor/rules/02-جسر-السحابة-الموحد.mdc` ← **now (continuum)**  
+- `2b) Vigil Web` → `.cursor/rules/03-عقد-مشروع-الويب.mdc`  
+- `2c) Support / DB` → `.cursor/rules/04-دعم-فني-وقواعد-البيانات.mdc`  
+- `2d) Desktop EXE` → `.cursor/rules/05-اختبار-برامج-EXE-ويندوز.mdc` ← **DEFERRED (lowest priority)**  
 - `2e) Vigil Secure` → `.cursor/rules/06-الأمان-الدفاعي-للويب.mdc`  
-**Execution order when planning ends:** Plan Mode first → Cloud Bridge / Vigil Web Phase 1 → Support DB / EXE / Secure (can overlap) → IDE LSP…  
-**Blocked by:** User still collecting requirements / ideas into the specs  
-**Last verified tests:** 210 passing (re-verify when execution starts)
+**Checkbox habit:** `[ ]` مش خلص · `🟨` جزئي · `✅` خلص (أخضر واضح)
 
-When planning ends and execution starts: set phase to EXECUTING, then check off slices in the roadmap + the relevant focus spec.
+> **عربي:** `✅` = خلص ونجح · `🟨` = اتعمل جزء · `[ ]` = لسه.

@@ -208,12 +208,50 @@ async function startWithModel(
     autoRun,
     toolPolicies,
     scriptTips,
+    planMode = false,
+    askMode = false,
   },
 ) {
   const style = typeof replyStyle === "string" ? replyStyle.trim() : "";
   const tips = typeof scriptTips === "string" ? scriptTips.trim() : "";
+  const askBranch = askMode
+    ? "ASK MODE is ON (Cursor-like Ask). Answer questions and explain the codebase. " +
+      "You may read/search/find/parallel_investigate. " +
+      "Do NOT edit files, apply patches, create PRs, push, or delegate write work — hard-blocked. " +
+      "Do not produce an execution plan unless the user asks to switch to Plan. " +
+      "Discuss, clarify, and teach. Never claim you changed the project. "
+    : "";
+  const planBranch =
+    planMode && !askMode
+      ? "PLAN MODE is ON. Investigate with read/search/find/parallel_investigate only — " +
+        "prefer parallel_investigate for cheap multi-area grounding before proposing steps. " +
+        "Produce a clear structured plan (use manage_plan for step list). " +
+        "When you know relevant paths/symbols, mention them so the user can attach hints/citations on steps. " +
+        "Mark optional vs must-have steps clearly; suggest acceptance checks (tests/commands) when useful. " +
+        "Do NOT call write_file, apply_patch, prepare_worktree, delegate_tasks, " +
+        "create_pull_request, or push_and_check_ci — they are hard-blocked until the user Executes. " +
+        "Do not claim you edited files. Ask the user to Approve/Execute when the plan is ready. "
+      : "";
+  const agentBranch =
+    planMode || askMode
+      ? ""
+      : "For NEW files only, call write_file with the full contents. " +
+        "For edits to EXISTING files, prefer apply_patch (surgical diffs) over rewriting the whole file. " +
+        "Never rewrite an existing file with write_file unless the user explicitly asked for a full replace " +
+        "or the file is brand new. When changing several files, apply_patch once per file (or one multi-file patch). " +
+        "HARD GATE: after a batch of meaningful code edits in the same turn, you MUST run the project's " +
+        "preferred test (or lint if no test) via run_commands before you finish. " +
+        "If it fails, fix with apply_patch and re-run until green or you hit a real blocker. " +
+        "Do not claim done while tests are still failing. " +
+        "For isolated experiments use prepare_worktree then pass workdir=... to later tools. " +
+        "On large multi-area work, prefer parallel_investigate for cheap fan-out, or delegate_tasks " +
+        "for independent subagents (optionally with branch worktrees). " +
+        "After pushing a feature branch: create_pull_request (draft), then push_and_check_ci / get_ci_status; " +
+        "if CI fails, fix with apply_patch, push_and_check_ci again until green. ";
   const systemPrompt =
     "You are Vigil, a personal desktop AI coding agent. Be actionable. " +
+    askBranch +
+    planBranch +
     "Prefer read_file / list_files / search_files / search_codebase to understand the workspace. " +
     "When the user asks where a symbol lives, how modules connect, or what to read first " +
     "in a large repo, prefer search_codebase (deep local BM25+vector index + import graph + paths + content). " +
@@ -222,23 +260,11 @@ async function startWithModel(
     "Call reindex_codebase only if index hits look stale after a large refactor. " +
     "Always search in the workspace cwd. " +
     "File/folder references in the prompt already include content or listings — use them before re-reading. " +
-    "For NEW files only, call write_file with the full contents. " +
-    "For edits to EXISTING files, prefer apply_patch (surgical diffs) over rewriting the whole file. " +
-    "Never rewrite an existing file with write_file unless the user explicitly asked for a full replace " +
-    "or the file is brand new. When changing several files, apply_patch once per file (or one multi-file patch). " +
-    "HARD GATE: after a batch of meaningful code edits in the same turn, you MUST run the project's " +
-    "preferred test (or lint if no test) via run_commands before you finish. " +
-    "If it fails, fix with apply_patch and re-run until green or you hit a real blocker. " +
-    "Do not claim done while tests are still failing. " +
+    agentBranch +
     "When Auto-run is off, wait for tool approval before each non-allowlisted command. " +
     "For multi-step tasks, call manage_plan first with clear steps, keep exactly one in_progress, " +
     "and mark steps completed as you go so the user sees progress. " +
     "Do not skip manage_plan on large features, refactors, or test/fix loops. " +
-    "For isolated experiments use prepare_worktree then pass workdir=... to later tools. " +
-    "On large multi-area work, prefer parallel_investigate for cheap fan-out, or delegate_tasks " +
-    "for independent subagents (optionally with branch worktrees). " +
-    "After pushing a feature branch: create_pull_request (draft), then push_and_check_ci / get_ci_status; " +
-    "if CI fails, fix with apply_patch, push_and_check_ci again until green. " +
     "Vigil Browser is the in-editor preview tab only. When the user asks to open a browser, " +
     "preview, localhost, a module, or a tool page: call browser_open with the full URL " +
     "(or 'project'). That updates the IDE tab — nothing outside Vigil. " +
@@ -246,9 +272,24 @@ async function startWithModel(
     "NEVER use terminal open/xdg-open. Prefer browser_open over browser_navigate for viewing. " +
     "If you need click/type automation on a website, browser_navigate runs headless (invisible) and still " +
     "updates Vigil Browser via browser_open. Never tell the user to use Command Palette. " +
-    "For Windows WinForms/DevExpress desktop apps: use app_launch (path or 'project') → " +
-    "app_snapshot → app_click / app_type / app_read / app_wait to open screens, fill fields, save, " +
-    "and report results. Desktop tools work on Windows only. " +
+    "For Windows WinForms/DevExpress desktop apps: use app_launch (path, 'project', or profile) → " +
+    "prefer app_search_ui for «فين الشاشة؟» / «فيها خاصية X؟» before random clicks; " +
+    "if miss → app_screen_map (bounded menu crawl) then confirm with app_screenshot when ambiguous → " +
+    "app_snapshot → app_click / app_select / app_type / app_keys / app_read / app_wait. " +
+    "Never claim a feature exists without a matching control from search/snapshot/map (or an honest unknown). " +
+    "Give Arabic menu/window paths as copyable breadcrumbs when the user wrote Arabic. " +
+    "Desktop tools work on Windows only. " +
+    "If the UI driver is missing, tell the user to click «تثبيت محرك الاختبار» in the Run sidebar " +
+    "(or Settings → Desktop apps) — do NOT ask them to run dotnet publish in a terminal. " +
+    "For live SQL Server / PostgreSQL (Support / DB Copilot): prefer sql_profiles_list → sql_connect " +
+    "(password from user/UI; never invent credentials) → sql_list_databases / sql_list_objects / " +
+    "sql_describe_table before guessing table names → sql_run for SELECT only while read-only. " +
+    "Never claim schema without catalog evidence. " +
+    "For «إيه الجملة اللي اتنفذت؟» / Profiler without SSMS: sql_capture_start → user opens report/clicks → " +
+    "sql_capture_stop (or sql_activity_live for a one-shot). Filter by login/host/app when known. " +
+    "When the user asks for a developer handoff / تيكت / bug ticket: use draft_support_ticket with " +
+    "structured fields (title, type, summary, repro steps, expected/actual, evidence, acceptance). " +
+    "Never put passwords or full production row dumps in tickets. " +
     "Always reply in the same language as the user's latest message " +
     "(Arabic→Arabic, English→English, and the same for every other language). " +
     "Do not switch languages unless the user asks. Keep code and paths unchanged." +
@@ -286,6 +327,9 @@ async function runClineTask(payload, emit) {
   const prompt = payload.prompt || "";
   const cwd = String(payload.cwd || BOOT_CWD).replace(/\/+$/, "") || BOOT_CWD;
   const autoRun = payload.autoRun === true;
+  const planMode = payload.planMode === true;
+  const askMode = payload.askMode === true;
+  const planExecuteUnlocked = payload.planExecuteUnlocked === true;
   const toolPolicies = buildToolPolicies(autoRun);
   const commandAllowlist = Array.isArray(payload.commandAllowlist)
     ? payload.commandAllowlist
@@ -296,6 +340,9 @@ async function runClineTask(payload, emit) {
   const approvalGate = createApprovalGate(emit, autoRun, {
     commandAllowlist,
     pathDenylist,
+    planMode,
+    askMode,
+    planExecuteUnlocked,
   });
 
   if (!apiKey) {
@@ -312,7 +359,7 @@ async function runClineTask(payload, emit) {
 
   emit({
     type: "status",
-    status: `provider=${providerId} model=${candidates[0]} cwd=${cwd} autoRun=${autoRun}`,
+    status: `provider=${providerId} model=${candidates[0]} cwd=${cwd} autoRun=${autoRun} planMode=${planMode} askMode=${askMode}`,
   });
 
   // Warm local code index in the background so search_codebase is ready.
@@ -514,6 +561,8 @@ async function runClineTask(payload, emit) {
           autoRun,
           toolPolicies,
           scriptTips,
+          planMode,
+          askMode,
         });
         const resultText = started?.result?.text ?? "";
         // Some SDKs return the 404 as answer text instead of throwing.
@@ -698,6 +747,69 @@ const server = createServer(async (req, res) => {
       const status = await getCodeIndexStatus(requestCwd);
       const out = JSON.stringify(status);
       res.writeHead(200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
+    if (payload.op === "sql") {
+      const {
+        sql_connect,
+        sql_disconnect,
+        sql_test_connection,
+        sql_list_databases,
+        sql_list_objects,
+        sql_describe_table,
+        sql_run,
+        sql_activity_live,
+        sql_capture_start,
+        sql_capture_stop,
+        sql_capture_list,
+        getSqlCaptureStatus,
+        listDbProfiles,
+        saveDbProfile,
+        getSqlSession,
+      } = await import("./db-connector.mjs");
+      const action = String(payload.action || "").trim();
+      const input = payload.input && typeof payload.input === "object" ? payload.input : {};
+      let result;
+      if (action === "session") {
+        result = { ok: true, session: getSqlSession() };
+      } else if (action === "profiles_list") {
+        result = { ok: true, profiles: await listDbProfiles(requestCwd) };
+      } else if (action === "profiles_save") {
+        result = await saveDbProfile(requestCwd, input);
+      } else if (action === "connect") {
+        result = await sql_connect(input, requestCwd);
+      } else if (action === "test") {
+        result = await sql_test_connection(input, requestCwd);
+      } else if (action === "disconnect") {
+        result = await sql_disconnect();
+      } else if (action === "list_databases") {
+        result = await sql_list_databases();
+      } else if (action === "list_objects") {
+        result = await sql_list_objects(input);
+      } else if (action === "describe_table") {
+        result = await sql_describe_table(input);
+      } else if (action === "run") {
+        result = await sql_run(input);
+      } else if (action === "activity_live") {
+        result = await sql_activity_live(input);
+      } else if (action === "capture_start") {
+        result = await sql_capture_start(input);
+      } else if (action === "capture_stop") {
+        result = await sql_capture_stop();
+      } else if (action === "capture_list") {
+        result = await sql_capture_list();
+      } else if (action === "capture_status") {
+        result = { ok: true, ...getSqlCaptureStatus() };
+      } else {
+        result = { ok: false, error: `Unknown sql action: ${action}` };
+      }
+      const out = JSON.stringify(result);
+      res.writeHead(result.ok === false ? 400 : 200, {
         "content-type": "application/json",
         "x-vigil-hmac": sign(out),
       });

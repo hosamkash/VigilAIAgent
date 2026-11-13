@@ -82,14 +82,14 @@ Vigil Web (separate repo)          VigilAIAgent (this repo)
 
 ## 1. Product principle
 
-- [x] **Cloud / online first.** Firestore is the system of record for account, chats, messages, plans, packages, wallets, usage, **billing & entitlements**.
-- [x] Local VigilDB on desktop is **optional cache only** — web does not depend on it.
-- [x] **One Vigil identity** everywhere: web, desktop EXE, phone browser, embed — same Firebase Auth account.
-- [x] **Unlimited devices / sessions** for the same account (no artificial device cap in Phase 1). Usage always drains **one shared wallet**.
-- [x] **Tight continuum:** Auth ↔ Packages ↔ Payment ↔ Admin ledger ↔ Desktop activation must stay one integrated loop (not three disconnected products).
-- [x] **Never** upload private repo source trees / git objects / deep index blobs to Firestore.
-- [x] Web can store **account Library assets** (prompts, images, docs the user uploads to cloud) — not the workspace monorepo.
-- [x] Vigil serves **more than developers**: Support / DB Copilot and later PM modes share the same account shell (see `04-دعم-فني-وقواعد-البيانات.mdc`).
+- ✅ **Cloud / online first.** Firestore is the system of record for account, chats, messages, plans, packages, wallets, usage, **billing & entitlements**.
+- ✅ Local VigilDB on desktop is **optional cache only** — web does not depend on it.
+- ✅ **One Vigil identity** everywhere: web, desktop EXE, phone browser, embed — same Firebase Auth account.
+- ✅ **Unlimited devices / sessions** for the same account (no artificial device cap in Phase 1). Usage always drains **one shared wallet**.
+- ✅ **Tight continuum:** Auth ↔ Packages ↔ Payment ↔ Admin ledger ↔ Desktop activation must stay one integrated loop (not three disconnected products).
+- ✅ **Never** upload private repo source trees / git objects / deep index blobs to Firestore.
+- ✅ Web can store **account Library assets** (prompts, images, docs the user uploads to cloud) — not the workspace monorepo.
+- ✅ Vigil serves **more than developers**: Support / DB Copilot and later PM modes share the same account shell (see `04-دعم-فني-وقواعد-البيانات.mdc`).
 
 ---
 
@@ -141,23 +141,23 @@ One login, one wallet, one history continuum — different tools per mode.
 | **Settings** | Language (AR/EN), default model, notifications, theme |
 
 **Sidebar — should (Phase 1.5)**
-- [ ] **Schedule** — reminders (e.g. “execute this plan tonight”), digests
-- [ ] **Starred / Pinned**
-- [ ] **Archived**
+- 🟨 **Schedule** — reminders stub (`/app/schedule` + Firestore `schedules`); digests later
+- ✅ **Starred / Pinned**
+- ✅ **Archived**
 - [ ] **Models** favorites / recent
 - [ ] **Help / What’s new**
 
 **Sidebar — Vigil differentiators (keep visible)**
-- [ ] **Desktop Execute** status (waiting for desktop / running / done)
-- [ ] **Continue on Desktop** (deep link / “open in Vigil” / QR)
+- 🟨 **Desktop Execute** status chip (live via `vigil:execution-status` in embed)
+- 🟨 **Continue on Desktop** (`vigil://continue` CTA on plan detail; QR later)
 - [ ] Optional **linked workspace hint** (display name only — never file contents)
 
 **Main canvas**
-- [ ] Streaming chat; multi-model picker gated by package entitlements
+- 🟨 Streaming chat; multi-model picker (Admin-enabled providers; package entitlement gate polish later)
 - [ ] Attach **Library** assets only (not local repo paths)
-- [ ] Plan draft panel: edit steps → Approve (writes Firestore plan status)
-- [ ] Empty states teach continuum: “Plan here → Execute on desktop”
-- [ ] Arabic + English first-class (RTL layout when AR)
+- 🟨 Plan draft panel: edit/reorder steps → Approve (writes Firestore plan status)
+- 🟨 Empty states teach continuum: “Plan here → Execute on desktop”
+- 🟨 Arabic + English first-class (RTL layout when AR)
 
 > **عربي:** لوحة الأدمن
 
@@ -172,7 +172,7 @@ One login, one wallet, one history continuum — different tools per mode.
 - [ ] **Payments ledger** (provider refs, status, failures, refunds) — every successful checkout visible here
 - [ ] Audit / support tools (impersonation later; Phase 1: read + attach package)
 - [ ] Global model / feature flags
-- [ ] Attach / upgrade / downgrade package on a user (auto after payment + manual override)
+- ✅ Attach / upgrade / downgrade package on a user (auto after payment + Admin attachPackage)
 
 **Reference only:** VigilHub admin patterns at  
 `/Users/user/Documents/Work/Hosam Projects/React/VigilHub/VigilHub` — adapt; do not clone ERP screens blindly.
@@ -191,10 +191,10 @@ One login, one wallet, one history continuum — different tools per mode.
 7. Admin dashboard shows the customer, package, payment row, and wallet — same Firestore truth.
 
 **Free / trial (must)**
-- [ ] **Free account** path without payment (Cursor-like try-before-buy)
-- [ ] Configurable **starter tokens** + **time window** (e.g. N tokens for D days) — Admin-editable package `free` / `trial`
-- [ ] Clear UX when free quota ends: soft block + Upgrade CTA (no silent infinite free)
-- [ ] Free usage still writes `usageEvents` and appears in Admin
+- ✅ **Free account** path without payment (signup trial grant + seed `free`/`trial`)
+- ✅ Configurable **starter tokens** + **time window** — env + seed packages `free` / `trial`
+- ✅ Clear UX when free quota ends: soft block + Upgrade CTA (`evaluateWalletGate` + `/api/chat` 402)
+- ✅ Free usage still writes `usageEvents` and appears in Admin
 
 **Paid / partner activation**
 - [ ] On successful payment: `subscription.status = active`, wallet credited, `user.planTier` updated
@@ -264,12 +264,12 @@ User Checkout UI
 
 #### Checkout UX rules
 
-- [ ] Pricing amounts for EG catalog in **EGP** (display); store `currency` on package + payment
-- [ ] Checkout shows methods as clear choices: Card / InstaPay / Wallet / Fawry (icons + short Arabic copy)
-- [ ] Sync methods (`card`, `wallet` instant confirm) → activate immediately on success webhook
-- [ ] Async methods (`fawry`, sometimes InstaPay pending) → UI state **“في انتظار الدفع”** + email/push when activated; desktop polls entitlement
-- [ ] Expiry: unpaid Fawry/InstaPay intents auto-`expired` (e.g. 24–48h) — no wallet credit
-- [ ] All methods write the same ledger shape (`method`, `provider`, `providerRef`, `status`)
+- ✅ Pricing amounts for EG catalog in **EGP** (display); store `currency` on package + payment
+- ✅ Checkout shows methods as clear choices: Card / InstaPay / Wallet / Fawry (sandbox radios)
+- ✅ Sync methods (`card`, `wallet` instant confirm) → activate immediately (sandbox)
+- 🟨 Async methods (`fawry`, InstaPay pending) → UI **في انتظار الدفع** + sandbox activate; email/push later
+- ✅ Expiry: unpaid intents auto-`expired` (default 48h via `expireStalePurchases`) — no wallet credit
+- ✅ All methods write the same ledger shape (`method`, `provider`, `providerRef`, `status`)
 
 #### Ops / compliance checklist (before go-live)
 
@@ -326,9 +326,9 @@ Plan {
 ```
 
 Web responsibilities:
-- [ ] Create/edit draft plans in UI (true edit / reorder — not prose-only)
-- [ ] Approve → `status: approved` in Firestore
-- [ ] Show live statuses while desktop Execute updates the same doc
+- ✅ Create/edit draft plans in UI (true edit / reorder — not prose-only)
+- ✅ Approve → `status: approved` in Firestore
+- 🟨 Show live statuses while desktop Execute updates the same doc (embed chip; desktop pulls plan on open)
 - [ ] Never embed private file contents in `hints` — paths/symbols/names only if needed
 
 Desktop responsibilities (VigilAIAgent — not this repo’s web code):
@@ -373,15 +373,15 @@ Required product loop:
 Desktop will also host Vigil Web (WebView / iframe / embedded browser) so history UX is identical.
 
 Web must support:
-- [ ] **Embed-safe mode** (`?embed=1` or `VigilEmbed` bridge) — hide redundant chrome if desktop already frames it
-- [ ] **Auth token / session bridge** so login isn’t double-friction
-- [ ] **postMessage / bridge events** (draft names — finalize at implement):
-  - `vigil:auth-handoff` / `vigil:session-ready`
-  - `vigil:entitlement-updated` (tier / wallet after pay or free grant)
-  - `vigil:plan-approve` / `vigil:plan-updated`
-  - `vigil:request-execute` → desktop confirms and runs
-  - `vigil:execution-status` ← desktop pushes status into web UI
-- [ ] Deep links: `/login`, `/pricing`, `/checkout`, `/plans/:id`, `/chats/:id`, `/projects/:id`
+- 🟨 **Embed-safe mode** (`?embed=1` + `/app` SiteNavGate) — hide marketing chrome
+- 🟨 **Auth token / session bridge** — `/embed/auth` + desktop idToken → `/api/session`
+- 🟨 **postMessage / bridge events**:
+ - ✅ `vigil:auth-handoff` / `vigil:auth-request` / `vigil:session-ready`
+ - [ ] `vigil:entitlement-updated` (tier / wallet after pay or free grant)
+ - [ ] `vigil:plan-approve` / `vigil:plan-updated`
+ - ✅ `vigil:request-execute` → desktop Plan Mode Execute
+ - 🟨 `vigil:execution-status` ← embed chip + Firestore + web PlanLiveStatus poll
+- 🟨 Deep links: `/login`, `/pricing`, `/plans/:id`, `/chats/:id`, `/projects/:id` (checkout later)
 - [ ] “Continue on Desktop” that opens/focuses VigilAIAgent when installed
 
 Desktop must:
@@ -411,9 +411,9 @@ Desktop must:
 - [ ] Firebase Auth + Firestore schema + security rules
 - [ ] User shell with sidebar must-items (incl. Pricing / Upgrade)
 - [ ] Free / trial package grant on signup (Admin-configurable)
-- [ ] Packages catalog + checkout with **Egypt method picker** (Card/Meeza, InstaPay, wallets, Fawry) — sandbox OK
-- [ ] Payments abstraction + at least one Egypt aggregator adapter + signed webhook path
-- [ ] Auto tier activation → Admin + Firestore ledger row (pending→paid for async rails)
+- 🟨 Packages catalog + checkout with **Egypt method picker** (Card/Meeza, InstaPay, wallets, Fawry) — sandbox OK; Kashier Test wired
+- 🟨 Payments abstraction + **Kashier** adapter + signed webhook (`x-kashier-signature`) — Paymob/FawryPay later
+- 🟨 Auto tier activation → Admin + Firestore ledger row (pending→paid for async rails) — Kashier SUCCESS webhook
 - [ ] Chat + messages + plans CRUD against Firestore
 - [ ] Admin skeleton: users, packages, payments list, attach package, basic usage
 - [ ] Desktop login handoff + embed mode + deep links
@@ -439,7 +439,7 @@ Desktop must:
 4. Payments abstraction + Egypt adapter(s): Card/Meeza, wallets, InstaPay, Fawry  
 5. Pricing/checkout UI (AR/EN) + webhook → entitlement activation (incl. async pending)  
 6. Admin: customers, packages, payments ledger (filter by method/status)  
-7. Chats/messages streaming against Firestore  
+7. ✅ Chats/messages streaming against Firestore (`/api/chat` + ChatRoom)  
 8. Plans UI aligned with Plan artifact  
 9. Desktop login handoff + embed bridge events  
 10. Schedule / Library polish + Apple/Google Pay + BNPL if needed  
@@ -470,10 +470,10 @@ Desktop must:
 
 ## 10. Open decisions (fill when known)
 
-- [ ] Web repo path / package name / hosting URL  
+- ✅ Web repo path: `/Users/user/Documents/Work/Hosam Projects/React/Vigil-AI-Agent-Web` (`hosamkash/Vigil-AI-Agent-Web`, branch `01-Build-WebSite`); hosting URL still open  
 - [ ] Stack choice for web (if not already started) — inventory existing preliminary UI at implement time  
-- [ ] Auth handoff mechanism desktop↔web (custom protocol vs loopback vs embedded-only)  
-- [ ] **Primary Egypt aggregator:** Paymob vs Kashier (or both) — must enable Card+Meeza + wallets + InstaPay on our MID  
+- 🟨 Auth handoff: iframe `postMessage` idToken → `/api/session` (custom protocol later if needed)  
+- 🟨 **Primary Egypt aggregator:** **Kashier** (Test MID wired) — confirm Live methods Card+Meeza + wallets + InstaPay + Fawry on MID  
 - [ ] **Fawry:** via primary aggregator vs direct **FawryPay** second adapter  
 - [ ] Optional intl rail (Stripe/Paddle) for non-EG — after Egypt local is live  
 - [ ] Currencies: EG catalog **EGP** default; multi-currency later  
@@ -497,7 +497,9 @@ _Append dated ideas; promote into sections when accepted._
 - 2026-11-11: **Egypt rails locked as product requirement:** Card+Meeza, **InstaPay** (API/QR/R2P — no screenshot), **wallets** (Vodafone/Orange/e&/WE), **Fawry reference**; Apple/Google Pay + BNPL should; Payments abstraction + aggregator shortlist Paymob / Kashier / FawryPay.  
 - 2026-11-11: **Support / DB Copilot** persona — SQL Server + PostgreSQL live connect to kill support copy-paste loop; web shell entry + desktop connector (see `04-دعم-فني-وقواعد-البيانات.mdc`).  
 - 2026-11-11: Support **Tickets** module + Azure DevOps API publish (per-engineer login); AI drafts professional tickets for developers.  
-- 2026-11-11: **Vigil Secure** sellable add-on — authorized web security assist + reports (`06-الأمان-الدفاعي-للويب.mdc`).  
+- 2026-11-11: **Vigil Secure** sellable add-on — authorized web security assist + reports (`06-الأمان-الدفاعي-للويب.mdc`). 
+- 2026-11-12: **Kashier Test** adapter — sessions v3 + Payment API Key HMAC webhook; keys in `.env.local` only; user sets dashboard Webhook = `{VIGIL_PUBLIC_URL}/api/payments/webhook`. 
+- 2026-11-12: Projects folder detail + assign; Search message hits. 
 - 
 
 ---

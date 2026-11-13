@@ -234,6 +234,102 @@ fn read_api_key_store(provider: &str) -> Result<String, VigilError> {
     )))
 }
 
+fn db_credentials_file_path() -> PathBuf {
+    app_support_dir().join("db_credentials.json")
+}
+
+fn read_db_credentials_file() -> HashMap<String, String> {
+    let Ok(raw) = fs::read_to_string(db_credentials_file_path()) else {
+        return HashMap::new();
+    };
+    serde_json::from_str::<HashMap<String, String>>(&raw).unwrap_or_default()
+}
+
+fn write_db_credentials_file(map: &HashMap<String, String>) -> Result<(), VigilError> {
+    let dir = app_support_dir();
+    fs::create_dir_all(&dir).map_err(|e| VigilError::Message(e.to_string()))?;
+    let raw = serde_json::to_string_pretty(map)
+        .map_err(|e| VigilError::Message(e.to_string()))?;
+    fs::write(db_credentials_file_path(), raw).map_err(|e| VigilError::Message(e.to_string()))
+}
+
+/// Save DB profile password locally (not in .vigil/db-profiles.json / not Firestore).
+#[tauri::command]
+fn save_db_credential(profile_id: String, password: String) -> Result<(), VigilError> {
+    let id = profile_id.trim().to_string();
+    if id.is_empty() {
+        return Err(VigilError::Message("profile_id required".into()));
+    }
+    if password.is_empty() {
+        return Err(VigilError::Message("password cannot be empty".into()));
+    }
+    let mut map = read_db_credentials_file();
+    map.insert(id, password);
+    write_db_credentials_file(&map)
+}
+
+#[tauri::command]
+fn get_db_credential(profile_id: String) -> Result<String, VigilError> {
+    let id = profile_id.trim().to_string();
+    if id.is_empty() {
+        return Err(VigilError::Message("profile_id required".into()));
+    }
+    let map = read_db_credentials_file();
+    map.get(&id)
+        .cloned()
+        .ok_or_else(|| VigilError::Message(format!("No DB credential for {id}")))
+}
+
+#[tauri::command]
+fn delete_db_credential(profile_id: String) -> Result<(), VigilError> {
+    let id = profile_id.trim().to_string();
+    if id.is_empty() {
+        return Ok(());
+    }
+    let mut map = read_db_credentials_file();
+    if map.remove(&id).is_some() {
+        write_db_credentials_file(&map)?;
+    }
+    Ok(())
+}
+
+const ADO_PAT_KEY: &str = "__ado_pat__";
+
+/// Save Azure DevOps PAT locally (never Firestore / never .vigil JSON).
+#[tauri::command]
+fn save_ado_pat(pat: String) -> Result<(), VigilError> {
+    let token = pat.trim().to_string();
+    if token.is_empty() {
+        return Err(VigilError::Message("PAT cannot be empty".into()));
+    }
+    let mut map = read_db_credentials_file();
+    map.insert(ADO_PAT_KEY.to_string(), token);
+    write_db_credentials_file(&map)
+}
+
+#[tauri::command]
+fn get_ado_pat() -> Result<String, VigilError> {
+    let map = read_db_credentials_file();
+    map.get(ADO_PAT_KEY)
+        .cloned()
+        .ok_or_else(|| VigilError::Message("No Azure DevOps PAT saved".into()))
+}
+
+#[tauri::command]
+fn delete_ado_pat() -> Result<(), VigilError> {
+    let mut map = read_db_credentials_file();
+    if map.remove(ADO_PAT_KEY).is_some() {
+        write_db_credentials_file(&map)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn has_ado_pat() -> Result<bool, VigilError> {
+    let map = read_db_credentials_file();
+    Ok(map.contains_key(ADO_PAT_KEY))
+}
+
 #[tauri::command]
 fn save_api_key(provider: String, api_key: String) -> Result<(), VigilError> {
     validate_provider(&provider)?;
@@ -808,6 +904,143 @@ fn read_workspace_override() -> Option<PathBuf> {
     if path.is_dir() { Some(path) } else { None }
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UiDriverStatus {
+    platform: String,
+    is_windows: bool,
+    app_root: String,
+    driver_dir: String,
+    driver_path: String,
+    ready: bool,
+    has_dotnet: bool,
+    dotnet_version: Option<String>,
+}
+
+fn ui_driver_paths(root: &Path) -> (PathBuf, PathBuf) {
+    let driver_dir = root.join("tools").join("vigil-ui-driver");
+    let driver_path = driver_dir.join("publish").join("vigil-ui-driver.exe");
+    (driver_dir, driver_path)
+}
+
+fn probe_dotnet() -> (bool, Option<String>) {
+    match Command::new("dotnet").arg("--version").output() {
+        Ok(out) if out.status.success() => {
+            let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            (true, if ver.is_empty() { None } else { Some(ver) })
+        }
+        _ => (false, None),
+    }
+}
+
+/// Status of the Windows FlaUI UI driver used by app_* tools.
+#[tauri::command]
+fn get_ui_driver_status() -> Result<UiDriverStatus, VigilError> {
+    let root = find_project_root()?;
+    let (driver_dir, driver_path) = ui_driver_paths(&root);
+    let (has_dotnet, dotnet_version) = probe_dotnet();
+    Ok(UiDriverStatus {
+        platform: std::env::consts::OS.to_string(),
+        is_windows: cfg!(windows),
+        app_root: root.to_string_lossy().into_owned(),
+        driver_dir: driver_dir.to_string_lossy().into_owned(),
+        driver_path: driver_path.to_string_lossy().into_owned(),
+        ready: driver_path.is_file(),
+        has_dotnet,
+        dotnet_version,
+    })
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UiDriverInstallResult {
+    ok: bool,
+    ready: bool,
+    driver_path: String,
+    log: String,
+}
+
+/// One-click: restore + publish vigil-ui-driver.exe (Windows + .NET SDK).
+#[tauri::command]
+fn install_ui_driver() -> Result<UiDriverInstallResult, VigilError> {
+    if !cfg!(windows) {
+        return Err(VigilError::Message(
+            "UI Driver install works on Windows only. Open Vigil on the Windows PC that runs the EXE apps."
+                .into(),
+        ));
+    }
+    let root = find_project_root()?;
+    let (driver_dir, driver_path) = ui_driver_paths(&root);
+    if !driver_dir.is_dir() {
+        return Err(VigilError::Message(format!(
+            "Driver project not found: {}",
+            driver_dir.display()
+        )));
+    }
+    if !probe_dotnet().0 {
+        return Err(VigilError::Message(
+            "NET SDK not found. Install .NET 8 SDK from https://dotnet.microsoft.com/download/dotnet/8.0 then try again."
+                .into(),
+        ));
+    }
+
+    let mut log = String::new();
+
+    let restore = Command::new("dotnet")
+        .arg("restore")
+        .current_dir(&driver_dir)
+        .output()
+        .map_err(|e| VigilError::Message(format!("dotnet restore failed to start: {e}")))?;
+    log.push_str("--- restore ---\n");
+    log.push_str(&String::from_utf8_lossy(&restore.stdout));
+    log.push_str(&String::from_utf8_lossy(&restore.stderr));
+    if !restore.status.success() {
+        return Ok(UiDriverInstallResult {
+            ok: false,
+            ready: false,
+            driver_path: driver_path.to_string_lossy().into_owned(),
+            log,
+        });
+    }
+
+    let publish = Command::new("dotnet")
+        .args([
+            "publish",
+            "-c",
+            "Release",
+            "-r",
+            "win-x64",
+            "--self-contained",
+            "false",
+            "-o",
+            "publish",
+        ])
+        .current_dir(&driver_dir)
+        .output()
+        .map_err(|e| VigilError::Message(format!("dotnet publish failed to start: {e}")))?;
+    log.push_str("\n--- publish ---\n");
+    log.push_str(&String::from_utf8_lossy(&publish.stdout));
+    log.push_str(&String::from_utf8_lossy(&publish.stderr));
+
+    let ready = driver_path.is_file();
+    let ok = publish.status.success() && ready;
+    if ok {
+        log.push_str("\n[ok] vigil-ui-driver.exe ready\n");
+    } else if !ready {
+        log.push_str(&format!(
+            "\n[error] publish finished but exe missing: {}\n",
+            driver_path.display()
+        ));
+    }
+
+    Ok(UiDriverInstallResult {
+        ok,
+        ready,
+        driver_path: driver_path.to_string_lossy().into_owned(),
+        log,
+    })
+}
+
 /// Workspace cwd used by the sidecar / agent tools.
 /// A folder the user opened wins over the app's own project root.
 #[tauri::command]
@@ -1269,6 +1502,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
         .manage(SidecarState {
             secret_hex,
             child: Mutex::new(None),
@@ -1279,12 +1513,27 @@ pub fn run() {
             if let Err(e) = spawn_sidecar_process(&state) {
                 eprintln!("[vigil] sidecar auto-spawn: {e}");
             }
+            // Cloud Bridge: vigil://continue?planId=…&execute=1
+            use tauri_plugin_deep_link::DeepLinkExt;
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    let _ = handle.emit("vigil://deep-link", url.to_string());
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             save_api_key,
             has_api_key,
             delete_api_key,
+            save_db_credential,
+            get_db_credential,
+            delete_db_credential,
+            save_ado_pat,
+            get_ado_pat,
+            delete_ado_pat,
+            has_ado_pat,
             list_configured_providers,
             settings_gate_open,
             lock_settings_gate,
@@ -1303,6 +1552,8 @@ pub fn run() {
             spawn_sidecar,
             get_workspace_cwd,
             set_workspace_cwd,
+            get_ui_driver_status,
+            install_ui_driver,
             list_git_hosts,
             save_git_host,
             get_git_token,

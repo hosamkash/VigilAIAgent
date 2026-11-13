@@ -434,6 +434,20 @@ export async function runCommand(id: string): Promise<void> {
         useEditorTabsStore.getState().openBrowser(hint ?? "");
         return;
       }
+      case "view.cloud": {
+        const { vigilWebEmbedUrl, isVigilWebConfigured } = await import(
+          "./cloud/vigil-web-url"
+        );
+        if (!isVigilWebConfigured()) {
+          toast(
+            "Set Vigil Web URL in Settings → Account (or VITE_VIGIL_WEB_URL), then open Cloud again.",
+          );
+          useEditorTabsStore.getState().openBrowser("");
+          return;
+        }
+        useEditorTabsStore.getState().openBrowser(vigilWebEmbedUrl());
+        return;
+      }
       case "view.problems":
         useLayoutStore.getState().setBottomTab("problems");
         return;

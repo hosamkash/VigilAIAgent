@@ -96,16 +96,16 @@ alwaysApply: true
 ### 1.2 Missing / unfinished (do not forget)
 
 - [ ] `app_screenshot` (+ chat image like `browser_screenshot`)  
-- [ ] `app_select` / expand / scroll / right-click / double-click / drag  
-- [ ] Screen-map builder + search (“find screen”) skill  
+- 🟨 `app_select` ✅; expand / scroll / right-click / double-click / drag still open  
+- ✅ Screen-map + search (`app_screen_map` / `app_search_ui`)  
 - [ ] Installed-app discovery (Start Menu / Program Files / registry uninstall keys)  
-- [ ] Saved **App profiles** (path, args, working dir, login macro)  
-- [ ] Desktop session chrome in IDE UI (parity with Browser tab)  
+- ✅ Saved **App profiles** (path, args, cwd — login macro later)  
+- ✅ Desktop session chip in StatusBar  
 - [ ] OCR / vision fallback for empty AutomationIds  
 - [ ] WPF validation + docs  
 - [ ] Replay / record regression scripts  
 - [ ] Vendor or CI publish of `vigil-ui-driver.exe`  
-- [ ] Arabic/English discovery playbooks in system prompt  
+- ✅ Arabic/English discovery playbooks in system prompt  
 - [ ] Glue to Support tickets, Plan Mode verify steps, DB Copilot  
 - [ ] Remote Windows agent (Mac Vigil → Windows box)  
 - [ ] HWND embed inside Vigil (optional dream — not required)  
@@ -249,19 +249,19 @@ Some products are EXE shell + embedded browser. Dream: same session can `app_*` 
 
 | Tool | Purpose |
 |------|---------|
-| `app_screenshot` | PNG/JPEG of main or focused window → chat |
-| `app_select` | Combo/list/select by ref + value |
+| ✅ `app_screenshot` | PNG of main window → chat |
+| ✅ `app_search_ui` | Fuzzy AR/EN search current snapshot → refs |
+| ✅ `app_profiles_list` / save | Local `.vigil/app-profiles.json` |
+| ✅ `app_select` | Combo/list/select by ref + value |
 | `app_expand` | Tree/node expand |
 | `app_scroll` | Scroll into view |
-| `app_keys` | Global or focused hotkeys (Alt+F, Ctrl+S) |
+| ✅ `app_keys` | Global or focused hotkeys (Alt+F, Ctrl+S) |
 | `app_right_click` / `app_double_click` | Context menus / activate |
-| `app_focus_window` | Switch among multiple top-level windows |
-| `app_list_windows` | Titles of open windows for this process |
-| `app_search_ui` | Fuzzy search current snapshot (AR/EN) → refs |
-| `app_screen_map` | Crawl menus (bounded depth) → structured map JSON |
+| ✅ `app_focus_window` | Switch among multiple top-level windows |
+| ✅ `app_list_windows` | Titles of open windows for this process |
+| ✅ `app_screen_map` | Crawl menus (bounded depth) → path list |
 | `app_record_start` / `app_record_stop` | Capture click/type sequence |
 | `app_replay` | Replay recorded steps with waits |
-| `app_profiles_list` / save | Manage local profiles |
 | `app_discover_installed` | Search Program Files / Start Menu / uninstall registry for name |
 | `app_ocr_snapshot` | OCR text boxes over screenshot (opt-in) |
 | `app_click_xy` | Coordinate click relative to window (last resort) |
@@ -491,7 +491,7 @@ Honest errors > fake success when tree is empty.
 ## 17. DevEx / packaging
 
 - [ ] README already: `dotnet publish` → `tools/vigil-ui-driver/publish/`  
-- [ ] First-run: if driver missing, show install/build instructions in Arabic/English  
+- ✅ First-run: if driver missing, show install/build via Run sidebar + Settings → Desktop apps (one-click; AR)  
 - [ ] Optional: ship driver in Windows Vigil installer  
 - [ ] `VIGIL_UI_DRIVER` env for custom builds  
 - [ ] Fixture app (`tools/vigil-ui-fixture`) tiny WinForms for tests — dream  
@@ -539,21 +539,21 @@ Windows lab agent (driver + EXE + maybe SQL)
 > **عربي:** قسم — Phase A — Finish MVP parity with “usable discovery”
 
 ### Phase A — Finish MVP parity with “usable discovery”
-1. Harden launch/attach + installed path profiles  
-2. `app_screenshot` + chat images  
-3. `app_search_ui` + prompt playbook for “find screen / has feature”  
-4. Desktop session chip/panel minimum  
-5. Docs + driver missing UX  
-6. Tests: expand smoke; fixture if possible  
+1. ✅ Harden launch/attach (cwd, multi-match candidates) + `.vigil/app-profiles.json` tools  
+2. ✅ `app_screenshot` + chat images  
+3. ✅ `app_search_ui` + prompt playbook for “find screen / has feature”  
+4. ✅ Desktop session chip (StatusBar)  
+5. ✅ Docs + driver missing UX (Run sidebar + Settings → Desktop apps)  
+6. ✅ Tests: profiles + bridge smoke (FlaUI fixture later)  
 
 > **عربي:** قسم — Phase B — Map & controls depth
 
 ### Phase B — Map & controls depth
-1. `app_screen_map` menu crawl  
-2. select/keys/windows/focus  
-3. DevExpress grid/ribbon notes + improvements  
-4. WPF smoke  
-5. Record/replay v1  
+1. ✅ `app_screen_map` menu crawl  
+2. ✅ select/keys/windows/focus (`app_select`, `app_keys`, `app_list_windows`, `app_focus_window`)  
+3. [ ] DevExpress grid/ribbon notes + improvements  
+4. [ ] WPF smoke  
+5. [ ] Record/replay v1  
 
 > **عربي:** قسم — Phase C — Product glue & delight
 

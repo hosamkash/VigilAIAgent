@@ -31,7 +31,9 @@ alwaysApply: true
 
 # Vigil Unified Cloud Bridge — Focus Spec (Phase 1+)
 
-**Status:** SPEC / PLANNING ONLY — no implementation until the user starts execution.  
+**Status:** EXECUTING — **desktop foundation done** (Auth + schema/rules + Account + chat/plan/usage push + pull chats). **Not closed:** Vigil Web shell (`03`), Admin, embed, billing, Firestore-as-primary UX.  
+**Checkbox habit:** `[ ]` مش خلص · `🟨` جزئي · `✅` خلص  
+**Read the colors:** أصفر/`[ ]` هنا = لسه شغل حقيقي — مش نسيان توثيق فقط. كثير من الـ `[ ]` في §4/§10 يخص **Vigil Web** مش الديسكتوب.
 **Goal:** One Vigil identity & conversation continuum: discuss anywhere (web) → save Plan → open desktop → **Execute** with full history — without re-explaining. Beat Cursor’s “desktop-only / re-brief the agent” pain.  
 **Related:** `.cursor/rules/00-الخطة-العامة-والأولويات.mdc`, `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc`  
 **Web project contract (portable):** `.cursor/rules/03-عقد-مشروع-الويب.mdc` — copy into the separate Vigil Web repo when that work starts.  
@@ -47,9 +49,9 @@ alwaysApply: true
 > **عربي:** قسم — Primary (the base)
 
 ### Primary (the base)
-- [x] **Firebase Auth + Firestore is the system of record** for account, subscriptions, wallets, usage, **chats, messages, and plans**.  
-- [x] Product is designed **cloud / online first**. Web and desktop both read/write the same Firestore hub under the same login.  
-- [x] Same account history on phone web ≡ desktop (including when desktop hosts the web UI).
+- ✅ **Firebase Auth + Firestore is the system of record** for account, subscriptions, wallets, usage, **chats, messages, and plans**.  
+- ✅ Product is designed **cloud / online first**. Web and desktop both read/write the same Firestore hub under the same login.  
+- ✅ Same account history on phone web ≡ desktop (including when desktop hosts the web UI).
 
 > **عربي:** قسم — Optional (not the base)
 
@@ -72,26 +74,27 @@ alwaysApply: true
 > **عربي:** قسم — In VigilAIAgent (desktop) today
 
 ### In VigilAIAgent (desktop) today
-- [x] Local chat / VigilDB / local usage logs (**today’s interim**; will become optional cache under this vision)  
-- [x] Local agent + tools (sidecar) for repo work  
-- [x] Mid-turn `manage_plan` (not full Plan Mode yet)  
-- [ ] **No** Firebase/Firestore as chat SoR  
-- [ ] **No** web Admin / User SaaS dashboards in this repo  
-- [ ] **No** ChatGPT-like cloud sidebar UX  
-- [ ] **No** embedded Vigil Web host/iframe inside desktop  
+- ✅ Local chat / VigilDB / local usage logs (**today’s interim**; will become optional cache under this vision)  
+- ✅ Local agent + tools (sidecar) for repo work  
+- ✅ Plan Mode artifact (local `.vigil/plans/` + cloud push when signed in)  
+- ✅ Firebase Auth + Firestore schema/types/rules (`src/lib/cloud/*`, `firebase/`) + Settings → Account  
+- ✅ Chat/plan/usage **push** + chat **pull** (signed-in); still not Firestore-primary UI  
+- [ ] Web Admin / User SaaS dashboards — **not in this repo** (`03` Vigil Web)  
+- [ ] ChatGPT-like cloud sidebar UX — **Vigil Web**  
+- [ ] Embedded Vigil Web host/iframe inside desktop  
 
 > **عربي:** قسم — Reference
 
 ### Reference
-- [~] Preliminary web UI (user-mentioned) — inventory at implement time  
-- [~] VigilHub Firebase/admin patterns — reference only  
+- [ ] Preliminary web UI inventory — when Vigil Web execution starts (`03`)  
+- ✅ VigilHub Firebase patterns used as **reference only** (env-based config; own-data rules — not VigilHub open rules)
 
 > **عربي:** قسم — Cursor
 
 ### Cursor
 - Weak on true web↔desktop continuum with one wallet + one history + execute-on-desktop. Vigil differentiator.
 
-**Phase 1 of this idea: NOT built yet.**
+**Phase 1:** desktop bridge foundation ✅; web shell + embed + billing still open.
 
 ---
 
@@ -163,9 +166,9 @@ alwaysApply: true
 
 **Sidebar — core (must)**
 - [ ] **New chat**  
-- [ ] **Search** chats / messages / plans (global)  
-- [ ] **Recent chats** (paginated / infinite)  
-- [ ] **Projects** (group chats + plans + notes under a named project; not the local git repo unless user links later)  
+- 🟨 **Search** chats / messages / plans / library (substring; messages bounded)  
+- [ ] **Recent chats** (paginated / infinite) 
+- 🟨 **Projects** (detail folder + assign chats/plans; create-in-project)
 - [ ] **Library** (saved prompts, uploaded images/docs allowed in cloud, bookmarked answers, plan templates)  
 - [ ] **Plans** (draft / approved / running / done — deep link into Plan Mode UI)  
 - [ ] **Usage / Wallet** (quota, tokens, cost, models used)  
@@ -180,15 +183,15 @@ alwaysApply: true
 - [ ] **Help / What’s new**  
 
 **Sidebar — differentiators vs ChatGPT (nice)**
-- [ ] **Desktop Execute** status chip (plan waiting for desktop / running / done)  
+- 🟨 **Desktop Execute** status chip (embed live status; Firestore phone follow-up later)  
 - [ ] **Linked workspace hint** (name only — never file upload)  
-- [ ] **Continue on Desktop** deep link / QR / “open in Vigil app”  
+- 🟨 **Continue on Desktop** — `vigil://continue?planId=&execute=1` + web CTA (QR later)  
 
 **Main canvas**
-- [ ] Streaming chat, multi-model selector (entitlement-gated)  
+- 🟨 Streaming chat + model picker (Admin-enabled providers; entitlement polish later)  
 - [ ] Attach images/files that are **account assets** (Library) — not the user’s private repo  
-- [ ] Plan draft/approve panel  
-- [ ] Empty states that teach the continuum (“Plan here → Execute on desktop”)
+- 🟨 Plan draft/approve panel (web edit/reorder + Approve shipped)  
+- 🟨 Empty states teach continuum on `/app` home (“Plan here → Execute on desktop”)
 
 ---
 
@@ -196,12 +199,15 @@ alwaysApply: true
 
 ## 5. Desktop embedding of Vigil Web (same carbon UI)
 
-- [ ] Host Vigil Web inside desktop via **WebView / iframe / embedded browser tab** (reuse Vigil Browser patterns where fit)  
-- [ ] Same origin session / token bridge so login isn’t duplicated awkwardly  
-- [ ] Chat history in the embed === web history (Firestore)  
-- [ ] Desktop chrome around embed: local workspace, agent Execute, terminal, LSP  
-- [ ] Clear UX: “Cloud chat” (web shell) vs “Local agent run” (tools)  
-- [ ] Fallback: native chat UI that reads Firestore if embed unavailable — still cloud SoR  
+- ✅ Desktop **Account** login (Firebase Auth email/password) — Settings → Account  
+- ✅ Best-effort **plan + chat sync to Firestore** when signed in (`persistActive` / `persistTab`)  
+- ✅ Pull chats from cloud → VigilDB (Account button + auto after sign-in)  
+- 🟨 Fallback native history merges cloud chats — Firestore-primary via **embed** preferred  
+- 🟨 Host Vigil Web in desktop **Browser iframe** (`view.cloud` / auto-open after sign-in → `/embed/auth?embed=1`)  
+- 🟨 Auth token bridge: desktop `postMessage` idToken → web `/api/session` (`vigil:auth-handoff`)  
+- 🟨 Chat history in embed === Firestore when session cookie set  
+- 🟨 Desktop Execute from embed: `vigil:request-execute` → Plan Mode `beginExecute`  
+- 🟨 Clear UX entry: “Vigil Cloud (Web)” menu + Account Open button vs local agent chat
 
 ---
 
@@ -209,17 +215,16 @@ alwaysApply: true
 
 ## 6. Firestore hub (SoR domains)
 
-- [ ] `users` / `orgs` / roles  
-- [ ] `packages`, `subscriptions`, `wallets`, `usageEvents`  
-- [ ] `chats`, `messages`  
-- [ ] `projects` (web-side project folders for chats/plans)  
-- [ ] `libraryItems`  
-- [ ] `plans` (portable artifact; syncable)  
-- [ ] `schedules` (optional Phase 1.5)  
-- [ ] `devices` / sessions  
-- [ ] Security rules: own-data; admin elevated  
+- ✅ Collection contract + TypeScript types (`src/lib/cloud/collections.ts`, `types.ts`)  
+- ✅ `users`, `packages`, `subscriptions`, `wallets`, `usageEvents`, `chats`, `messages`, `projects`, `libraryItems`, `plans`, `schedules`, `devices` named  
+- ✅ `plans` portable push/pull helpers (`plan-cloud.ts`, `plans-sync.ts`)  
+- ✅ `chats`/`messages` map+push+pull helpers (`chat-cloud.ts`, `chats-sync.ts`, `cloud-hydrate.ts`)  
+- ✅ `usageEvents` + `devices` desktop writers  
+- ✅ Security rules stub: own-data + no-code-upload keys (`firebase/firestore.rules`)  
+- 🟨 Live cloud CRUD from product UX — push/pull wired; Firestore-as-primary chat canvas still open  
+- [ ] Admin elevated writes via Cloud Functions  
 
-**Never in Firestore:** repo source, git objects, deep index.
+**Never in Firestore:** repo source, git objects, deep index — enforced by `assertNoCodeUpload` + rules.
 
 ---
 
@@ -230,30 +235,33 @@ alwaysApply: true
 > **عربي:** قسم — Sync
 
 ### Sync
-- [ ] All first-party chat/plan writes go to Firestore when online  
-- [ ] Desktop + web always load from Firestore as primary  
+- ✅ Chat + plan writes mirror to Firestore when signed in (desktop push)  
+- ✅ Pull chats from cloud → local history (Account + after sign-in)  
+- 🟨 Firestore **primary** load path (skip VigilDB-first) — not yet; local still default canvas  
 - [ ] Optional local cache warm on launch; invalidate on cloud newer `updatedAt`  
-- [ ] Agent coding tools never blocked by chat sync failures (queue cloud writes)
+- ✅ Agent coding tools never blocked by chat sync failures (best-effort try/catch; local save first)
 
 > **عربي:** قسم — Plan handoff
 
 ### Plan handoff
-- [ ] Approve on web → visible on desktop (embed or native)  
-- [ ] **Execute** runs local sidecar tools  
-- [ ] Status mirrored to Firestore for phone follow-up  
+- 🟨 Approve on web → same Firestore plan; desktop **pulls on open** (`ensureLocalPlanFromCloud` / hydrate)  
+- 🟨 **Execute** via embed button → `vigil:request-execute` → openPlan (cloud pull) → beginExecute  
+- 🟨 Status mirrored via `vigil:execution-status` + Firestore push; web `PlanLiveStatus` polls API
 
 > **عربي:** قياس الاستهلاك والمحفظة
 
 ### Metering
-- [ ] One wallet across web + desktop + all enabled models + **unlimited devices** (same account)
+- ✅ Desktop `usageEvents` written when signed in  
+- 🟨 Wallet debit / shared balance — desktop debits `users.tokenBalance` on usage; CF idempotency later  
+- ✅ Devices registered on login (audit only — unlimited)
 
 > **عربي:** قسم — Billing & identity continuum (see `03-عقد-مشروع-الويب.mdc` §2.3 + §2.4 + §5)
 
 ### Billing & identity continuum (see `03-عقد-مشروع-الويب.mdc` §2.3 + §2.4 + §5)
-- [ ] User Web **Pricing → packages → checkout → auto activate** paid/partner in Firestore + Admin ledger  
-- [ ] **Free/trial** starter tokens for a configurable period  
-- [ ] Desktop EXE **opens Web login** → handoff back → account activated on desktop  
-- [ ] **Egypt local rails (must):** Card+Meeza, InstaPay (API), wallets (VF/Orange/e&/WE), Fawry reference — not Stripe-only; no manual transfer screenshots  
+- 🟨 User Web **Pricing → packages → checkout → auto activate** (sandbox + **Kashier Test** adapter)  
+- ✅ **Free/trial** starter tokens for a configurable period (signup + seed packages)  
+- 🟨 Desktop EXE **opens Web login** → handoff via embed auth bridge (custom URL scheme later)  
+- 🟨 **Egypt local rails:** Kashier sessions + signed webhook; set `VIGIL_PUBLIC_URL` + dashboard webhook URL  
 
 ---
 
@@ -262,10 +270,10 @@ alwaysApply: true
 ## 8. Phase 1 scope
 
 **In**
-- [ ] Firestore-first auth + schema  
-- [ ] Admin minimal + User shell with sidebar (New Chat, Search, Recents, Projects, Library, Plans, Usage)  
-- [ ] Chat/plan/usage in Firestore  
-- [ ] Desktop: login, show same history (prefer web embed), Execute plan locally  
+- ✅ Firestore-first auth + schema (desktop foundation)  
+- ✅ Chat/plan/usage **push** + chat **pull** from desktop when signed in  
+- [ ] Admin minimal + User shell with sidebar (New Chat, Search, Recents, Projects, Library, Plans, Usage) — **`03` Vigil Web**  
+- 🟨 Desktop: login + cloud merge done; **same history via embed** + Firestore-primary UI next  
 - [ ] Optional local cache **behind a flag** (default off or read-through only)  
 
 **Out of Phase 1**
@@ -280,13 +288,17 @@ alwaysApply: true
 
 ## 9. Build order (when execution starts)
 
-1. Plan Mode artifact stable (`01-وضع-التخطيط-Plan-Mode.mdc`)  
-2. Firebase Auth + Firestore schema + rules  
-3. User web shell (sidebar IA) + chat/plans against Firestore  
-4. Admin skeleton (packages/users/wallets)  
-5. Desktop login + **embed Vigil Web** + Execute handoff  
-6. Optional local cache layer  
-7. Schedule / advanced Library polish  
+1. ✅ Plan Mode artifact stable (`01-وضع-التخطيط-Plan-Mode.mdc`)  
+2. ✅ Firebase Auth + Firestore schema + rules (desktop foundation: `src/lib/cloud/*`, `firebase/firestore.rules`, Settings → Account)  
+3. 🟨 User web shell (sidebar IA) + **streaming chat** against Firestore — Plan edit next (`03`)  
+4. [ ] Admin skeleton (packages/users/wallets) — **Vigil Web**  
+5. 🟨 Desktop login + **embed Vigil Web** + Execute handoff — auth bridge + request-execute + **plan pull on open**  
+6. [ ] Optional local cache layer  
+7. [ ] Schedule / advanced Library polish  
+
+> **عربي:** اتعمل على الديسكتوب: بند 1–2 + لوجن + push/pull شات + usage + devices.  
+> **لسه مفتوح في الملف ده:** §4 ويب بالكامل، §5 embed، plan handoff من الويب، billing، Firestore-primary، Admin Functions.  
+> **الجاي بالأولوية:** شيل Vigil Web (`03`) — يحتاج مسار ريبو — وبعده embed في الديسكتوب.
 
 ---
 
@@ -298,8 +310,8 @@ alwaysApply: true
 - [ ] Local DB not required for the happy path  
 - [ ] User web sidebar supports New Chat, Search, Recents, Projects, Library, Plans, Usage  
 - [ ] Desktop shows the **same** account history (embed preferred)  
-- [ ] Execute plan on desktop without re-briefing  
-- [ ] No project source in Firestore  
+- 🟨 Execute plan on desktop without re-briefing (plan pull on open; end-to-end smoke still manual)  
+- ✅ No project source in Firestore (client guard + rules)  
 - [ ] Admin can attach a package to a user  
 
 ---
@@ -308,7 +320,7 @@ alwaysApply: true
 
 ## 11. Open decisions
 
-- [ ] Web app repo location (also tracked in `03-عقد-مشروع-الويب.mdc` §10)  
+- ✅ Web app repo: `/Users/user/Documents/Work/Hosam Projects/React/Vigil-AI-Agent-Web` (`hosamkash/Vigil-AI-Agent-Web`)  
 - [ ] Embed tech: Tauri webview vs existing Vigil Browser tab vs iframe to hosted URL  
 - [ ] Auth token bridge desktop↔embed  
 - [ ] BYOK vs hosted keys for cloud chat  
@@ -326,9 +338,19 @@ alwaysApply: true
 - 2026-11-11: Desktop should **host/iframe** the same web so history UX is carbon-copy; agent Execute stays local.  
 - 2026-11-11: Split **portable Vigil Web contract** into `03-عقد-مشروع-الويب.mdc` for the separate web repo (still related / continuum with desktop).  
 - 2026-11-11: Billing+auth continuum: Pricing/checkout, free trial, auto paid/partner, Admin ledger, EXE→Web login handoff, multi-device one wallet; Egypt PSP open.  
-- 
+- 2026-11-12: **EXECUTING** — Cloud Bridge slice 1: `src/lib/cloud/*`, `firebase/firestore.rules`, Settings Account login, plan push + no-code-upload tests.  
+- 2026-11-12: Slice 1b — chat/message cloud map+push, usageEvents, device touch on login.  
+- 2026-11-12: Slice 1c — pull chats from cloud → VigilDB history + Account UI.  
+- 2026-11-12: Checkbox audit — clarified desktop foundation ✅ vs remaining Web/embed/`[ ]`/`🟨` (not closed). 
+- 2026-11-12: Embed auth bridge (`/embed/auth` + postMessage idToken) + Execute handoff button on plan detail. 
+- 2026-11-12: **Plan pull** — `ensureLocalPlanFromCloud` + hydrate plans on sign-in / Account button; unblocks approve-on-web → Execute. 
+- 2026-11-12: Web **Projects** detail + assign chat/plan; **Search** includes message snippets. 
+- 2026-11-12: **Continue on Desktop** deep link (`vigil://`) + PlanLiveStatus poll + desktop wallet debit. 
+-
 
 ---
+
+- 2026-11-12: Continuum Wave A — auth-restore hydrate, uid+userId+ms, smarter chat merge, web iso(ms), push on close/archive, embed auto-open; EXE deferred by product priority.
 
 > **عربي:** حاجات مش في النطاق / خطوط حمراء
 

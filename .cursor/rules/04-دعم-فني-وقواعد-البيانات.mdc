@@ -34,7 +34,7 @@ alwaysApply: true
 
 # Vigil Support / DB Copilot — Focus Spec
 
-**Status:** SPEC / PLANNING ONLY — no implementation until the user starts execution.  
+**Status:** EXECUTING — DB core ✅; Tickets+ADO PAT ✅; Profiler DMV capture ✅ (XEvents later).  
 **Why:** Vigil is not only for coders. **Technical support** (and later PMs) need AI that can **see live databases** — especially **SQL Server** and **PostgreSQL** — instead of the painful loop: explain schema → AI guesses SQL → paste into SSMS → fail → re-explain. Cursor has no first-class “login to SQL Server and work on the live catalog.” This is a Vigil differentiator.  
 **Related:** `.cursor/rules/03-عقد-مشروع-الويب.mdc`, `.cursor/rules/02-جسر-السحابة-الموحد.mdc`, `.cursor/rules/00-الخطة-العامة-والأولويات.mdc`, `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc`
 
@@ -122,8 +122,8 @@ Browsers cannot safely open raw SQL Server/Postgres sockets to private servers. 
          Agent context (no full DB dump to Firestore)
 ```
 
-- [x] **Phase 1:** Desktop owns the live connection.  
-- [x] **Phase 1 web:** same Support shell; browser-alone → **Open in Vigil Desktop to connect** (or embed already running on desktop).  
+- ✅ **Phase 1:** Desktop owns the live connection.  
+- ✅ **Phase 1 web:** same Support shell; browser-alone → **Open in Vigil Desktop to connect** (or embed already running on desktop).  
 - [ ] **Later:** on-prem **Vigil DB Gateway** for true browser-only teams — same connector API; still no raw passwords in Firestore.  
 - [ ] **Never** put SQL passwords in Firestore plaintext.  
 - [ ] Optional cloud fields: connection **display name**, host nickname, engine type, last-used — **not** secrets.  
@@ -140,31 +140,31 @@ Browsers cannot safely open raw SQL Server/Postgres sockets to private servers. 
 
 ### 4.1 Login / Connect screen
 
-- [ ] Engine picker: **SQL Server** | **PostgreSQL** (extensible later: MySQL, Oracle…)  
-- [ ] Fields: Host / IP, Port (1433 / 5432 defaults), Instance (SQL Server), Database (optional at connect), Username, Password, Encrypt/TrustServerCertificate toggles, SSL mode (Postgres)  
-- [ ] Optional: named **Connection profile** (“Prod support read-only”, “UAT”)  
-- [ ] Test connection → success/fail with clear Arabic/English errors  
-- [ ] On success: session connected; sidebar shows server → databases
+- ✅ Engine picker: **SQL Server** | **PostgreSQL** (extensible later: MySQL, Oracle…)  
+- ✅ Fields: Host / IP, Port (1433 / 5432 defaults), Database (optional at connect), Username, Password, TrustServerCertificate (Instance / Postgres SSL modes later)  
+- ✅ Optional: named **Connection profile** (“Prod support read-only”, “UAT”) — `.vigil/db-profiles.json`  
+- ✅ Test connection → success/fail with clear Arabic/English errors  
+- ✅ On success: session connected + StatusBar chip; **visual catalog** (SupportCatalogPanel) + agent tools
 
 > **عربي:** قسم — 4.2 After connect — catalog browser
 
 ### 4.2 After connect — catalog browser
 
-- [ ] List databases (permission-filtered)  
-- [ ] Expand: schemas, tables, views, columns (name/type/nullable/PK/FK), indexes  
-- [ ] SQL Server: stored procedures, functions, synonyms, jobs (later)  
-- [ ] PostgreSQL: functions, materialized views, extensions (later)  
-- [ ] Search objects by name  
-- [ ] “Add to chat context” on table/view/proc (structured mention, like `@table`)
+- ✅ List databases via `sql_list_databases` (permission-filtered by login)  
+- ✅ Expand via tools + visual catalog: schemas/tables/views (`sql_list_objects` / `sql_describe_table`)  
+- 🟨 SQL Server: stored procedures listed in objects; functions/synonyms/jobs later  
+- 🟨 PostgreSQL: tables/views/columns; functions/matviews/extensions later  
+- ✅ Search objects by name (catalog filter + `@table:` mentions)  
+- ✅ “Add to chat context” on table (`@table` chip / catalog button)
 
 > **عربي:** أوضاع الأمان
 
 ### 4.3 Safety modes
 
-- [ ] Default **Read-only** session (SELECT / VIEW DEFINITION only) for support  
+- ✅ Default **Read-only** session (SELECT / VIEW DEFINITION only) for support — `sql-safety.mjs`  
 - [ ] Explicit **Write mode** toggle (INSERT/UPDATE/DELETE/DDL) with confirm + optional approval policy  
-- [ ] Destructive statement detection (`DROP`, `TRUNCATE`, `ALTER`, `DELETE` without WHERE) → hard confirm  
-- [ ] Row limits / timeout / cancel running query  
+- ✅ Destructive statement detection (`DROP`, `TRUNCATE`, `ALTER`, writes) → blocked in read-only  
+- ✅ Row limits / timeout on `sql_run` (cancel later)  
 - [ ] Audit log locally (+ optional Admin usage event: “ran query”, not full SQL text unless user opts in)
 
 ---
@@ -249,7 +249,7 @@ See `05-اختبار-برامج-EXE-ويندوز.mdc` §13.1 — keep both specs
 
 #### Implementation sketch (when executing)
 
-- [ ] Tools: `sql_activity_live`, `sql_capture_start`, `sql_capture_stop`, `sql_capture_list`  
+- ✅ Tools: `sql_activity_live`, `sql_capture_start`, `sql_capture_stop`, `sql_capture_list`  
 - [ ] Prefer XEvents ring_buffer for short captures; fall back to DMV sampling loop  
 - [ ] Parse `rpc_completed` object_name + statement for procs Crystal/EXE love  
 
@@ -289,10 +289,10 @@ After Support (or PM) finishes studying an issue inside Vigil, they must leave w
 
 Not a buried chat export — a **dedicated Support Tickets** module in the shell (web + desktop embed):
 
-- [ ] Sidebar: **Tickets** (under Support) — drafts, ready-to-publish, published  
-- [ ] Composer panel: structured ticket preview the engineer can edit before send  
-- [ ] Engineer steers in natural language (“طلّعلي تيكت باج للمبرمجين عن تقرير المبيعات”) → Vigil drafts the ticket  
-- [ ] One-click **Copy**, **Save draft** (Firestore), **Publish to Azure DevOps** (primary)
+- 🟨 Sidebar / Run: **Tickets** — drafts list + composer (desktop); web Tickets later  
+- ✅ Composer panel: structured ticket preview the engineer can edit before send  
+- ✅ Engineer steers in natural language → `draft_support_ticket` fills the panel  
+- 🟨 One-click **Copy** + **Save draft** (local `.vigil/tickets/`); Firestore later; **Publish to Azure DevOps** via PAT ✅  
 
 > **عربي:** قسم — 7.2 Ticket quality bar (what “محترمة” means)
 
@@ -315,9 +315,9 @@ Vigil proposes a strong default template (AR/EN); engineer tweaks; then publish:
 | **Out of scope / notes** | Optional |
 | **Priority / Severity** | P0–P3 + Sev |
 
-- [ ] AI fills from **current Support chat + DB context** so the engineer doesn’t re-type the investigation  
-- [ ] Engineer can say “اختصر” / “زود تفاصيل للـ DBA” / “خليها Task مش Bug” and regenerate sections  
-- [ ] Output is scannable **bullets + short paragraphs** — not a wall of chat dump
+- ✅ AI fills via `draft_support_ticket` from investigation (chat + optional SQL session label/env)  
+- ✅ Engineer can ask to revise (re-call tool / edit panel); type/priority editable in UI  
+- ✅ Output is scannable **bullets + short paragraphs** (markdown formatter)  
 
 > **عربي:** قسم — 7.3 Azure DevOps — primary publish target (APIs: YES)
 
@@ -334,10 +334,10 @@ Vigil proposes a strong default template (AR/EN); engineer tweaks; then publish:
 - Permissions: user’s own ADO identity creates the item (audit trail = that engineer), subject to project permissions.
 
 **Vigil UX for ADO link**
-- [ ] Settings → **Integrations → Azure DevOps**: Connect account (Entra OAuth)  
-- [ ] Choose default **Organization**, **Project**, default work item type (Bug/Task), Area Path  
+- 🟨 Settings → **Integrations → Azure DevOps**: **PAT** connect shipped; Entra OAuth later  
+- ✅ Choose default **Organization**, **Project**, default work item type (Bug/Task), Area Path  
 - [ ] Per-ticket override before publish  
-- [ ] On success: save `adoWorkItemId`, URL, title on the Vigil ticket draft; status → `published`  
+- ✅ On success: save `adoWorkItemId`, URL on the Vigil ticket draft; status → `published`  
 - [ ] Optional: attach truncated evidence as Discussion comment via API  
 
 **Not required:** embedding the full Azure DevOps website as the only create path (may still deep-link to open the item after publish).
@@ -477,17 +477,17 @@ In `03-عقد-مشروع-الويب.mdc` sidebar (Support-capable accounts / pac
 ## 11. Phase 1 scope (DB Copilot)
 
 **In**
-- [ ] Desktop connector: SQL Server + PostgreSQL connect + catalog browser  
-- [ ] Read-only default + run SELECT with limits  
-- [ ] Chat grounded via describe/list/ddl tools  
+- ✅ Desktop connector: SQL Server + PostgreSQL connect + catalog **tools** (visual browser later)  
+- ✅ Read-only default + run SELECT with limits  
+- ✅ Chat grounded via describe/list tools (`sql_*` + system prompt)  
 - [ ] Web: Support mode shell + deep link; live connect via desktop/embed bridge  
-- [ ] Credential storage in OS keychain / local vault  
-- [ ] **Support Ticket Composer** (structured template + AI draft from session)  
-- [ ] **Azure DevOps publish** via REST (Entra OAuth or PAT) → return work item id + link  
+- ✅ Credential storage in local vault (Tauri `save_db_credential`; OS keychain polish later)  
+- 🟨 **Support Ticket Composer** (local draft/edit/copy; cloud sync later)  
+- 🟨 **Azure DevOps publish** via REST (**PAT** done; Entra OAuth later) → work item id + link  
 
 **Phase 1.5 (right after core connect — high support value)**  
-- [ ] **SQL Activity Capture** DMV live + short capture window (SQL Server; Postgres pg_stat_*)  
-- [ ] Filters by login/host/app; exclude Vigil spid  
+- ✅ **SQL Activity Capture** DMV live + short capture window (SQL Server; Postgres pg_stat_*)  
+- ✅ Filters by login/host/app; exclude Vigil heuristics  
 - [ ] Optional sync with Desktop EXE “capture while I click”  
 
 **Out of Phase 1**
@@ -563,6 +563,9 @@ In `03-عقد-مشروع-الويب.mdc` sidebar (Support-capable accounts / pac
 - 2026-11-11: **Support Ticket Composer** (dedicated UI) → high-quality developer handoff; **Azure DevOps REST create work item** primary (Entra OAuth per engineer); Jira/GitHub later.  
 - 2026-11-11: **Delight layer** — Crystal↔SQL report binder/wizard, glossary, playbooks, env diff, query favorites; **PM workspace** digests/meeting→ADO/client updates — habit-forming calm UX.  
 - 2026-11-11: **Vigil Profiler / SQL Activity Capture** — DMVs + Extended Events (not classic Profiler UI); capture-on-EXE-click; filters replace SPID ritual; Postgres pg_stat_* analogue.  
+- 2026-11-12: Ticket Composer local shipped (`draft_support_ticket`, `.vigil/tickets/`, SupportTicketPanel).  
+- 2026-11-12: ADO PAT publish shipped (Settings → Integrations + Publish button).  
+- 2026-11-12: Profiler DMV capture shipped (`sql_activity_*` + SupportActivityCard).  
 - 
 
 ---

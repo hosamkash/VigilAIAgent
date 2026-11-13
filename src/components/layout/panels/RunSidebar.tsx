@@ -16,6 +16,59 @@ import {
 } from "../../../lib/vigil-db";
 import { suggestRunCommand } from "../../../lib/run-command-ai";
 import { Sparkles } from "lucide-react";
+import { DesktopUiDriverCard } from "../../DesktopUiDriverCard";
+import { SupportDbCard } from "../../SupportDbCard";
+import { SupportActivityCard } from "../../SupportActivityCard";
+import { SupportCatalogPanel } from "../../SupportCatalogPanel";
+import { useSupportTicketStore } from "../../../store/supportTicketStore";
+
+function SupportTicketsCard() {
+  const createDraft = useSupportTicketStore((s) => s.createDraft);
+  const setPanelOpen = useSupportTicketStore((s) => s.setPanelOpen);
+  const refreshList = useSupportTicketStore((s) => s.refreshList);
+  const recent = useSupportTicketStore((s) => s.recentTickets);
+  const active = useSupportTicketStore((s) => s.activeTicket);
+
+  useEffect(() => {
+    void refreshList();
+  }, [refreshList]);
+
+  return (
+    <div className="mb-3 rounded border border-[var(--vigil-border)] p-2 text-[11px]">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-semibold uppercase text-[var(--vigil-muted)]">
+          Support tickets
+        </span>
+        <button
+          type="button"
+          className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5 hover:bg-[var(--vigil-hover)]"
+          onClick={() => {
+            void createDraft();
+          }}
+        >
+          + Draft
+        </button>
+      </div>
+      <p className="mb-1 text-[var(--vigil-muted)]">
+        {active
+          ? `Open: ${active.title}`
+          : recent[0]
+            ? `Latest: ${recent[0].title}`
+            : "Ask chat for a developer ticket, or start a draft."}
+      </p>
+      <button
+        type="button"
+        className="rounded border border-[var(--vigil-border)] px-2 py-1 hover:bg-[var(--vigil-hover)]"
+        onClick={() => {
+          if (active) setPanelOpen(true);
+          else void createDraft();
+        }}
+      >
+        Open composer
+      </button>
+    </div>
+  );
+}
 
 interface DiscoveredConfig {
   id: string;
@@ -503,6 +556,12 @@ export function RunSidebar() {
           </div>,
           document.body,
         )}
+      <SupportDbCard compact />
+      <SupportCatalogPanel compact />
+      <SupportActivityCard compact />
+      <SupportTicketsCard />
+      <DesktopUiDriverCard compact />
+
       <div className="mb-2 flex items-center justify-between gap-2 pr-12">
         <div className="text-[11px] font-semibold uppercase text-[var(--vigil-muted)]">
           Run and Debug
