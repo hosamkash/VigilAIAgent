@@ -69,7 +69,7 @@ export function ClipShelfButton() {
   };
 
   return (
-    <div ref={boxRef} className="relative" data-clip-shelf>
+    <div ref={boxRef} className="relative shrink-0" data-clip-shelf>
       <button
         type="button"
         title="Copied items"

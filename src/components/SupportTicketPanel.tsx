@@ -5,8 +5,10 @@ import type {
   SupportTicketType,
 } from "../lib/support-ticket";
 import { looksArabic } from "../lib/plan-mode-heuristics";
-import { publishSupportTicketToAdo } from "../lib/ado-settings";
+import { publishSupportTicket } from "../lib/publish-support-ticket";
+import { ticketPlatformById } from "../lib/ticket-platforms";
 import { useSupportTicketStore } from "../store/supportTicketStore";
+import { useTicketPlatformStore } from "../store/ticketPlatformStore";
 import { useEditorTabsStore } from "../store/editorTabsStore";
 
 const TYPES: SupportTicketType[] = ["Bug", "Task", "User Story", "Spike"];
@@ -24,8 +26,12 @@ function textToLines(value: string): string[] {
     .filter(Boolean);
 }
 
-/** Editable Support ticket composer (draft → ready; ADO later). */
-export function SupportTicketPanel() {
+/** Editable Support ticket composer (draft → ready → publish). */
+export function SupportTicketPanel({
+  layout = "chat",
+}: {
+  layout?: "chat" | "page";
+}) {
   const ticket = useSupportTicketStore((s) => s.activeTicket);
   const panelOpen = useSupportTicketStore((s) => s.panelOpen);
   const recent = useSupportTicketStore((s) => s.recentTickets);
@@ -43,12 +49,14 @@ export function SupportTicketPanel() {
   const [copied, setCopied] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const platformId = useTicketPlatformStore((s) => s.platformId);
+  const platform = ticketPlatformById(platformId);
 
   useEffect(() => {
     void refreshList();
   }, [refreshList, panelOpen]);
 
-  if (!panelOpen && !ticket) return null;
+  if (layout === "chat" && !panelOpen && !ticket) return null;
 
   const ar = looksArabic(`${ticket?.title || ""} ${ticket?.summary || ""}`);
   const t = {
@@ -59,11 +67,17 @@ export function SupportTicketPanel() {
     copy: ar ? "نسخ Markdown" : "Copy Markdown",
     close: ar ? "إغلاق" : "Close",
     history: ar ? "السجل" : "History",
-    publish: ar ? "نشر إلى Azure DevOps" : "Publish to Azure DevOps",
+    publish: ar ? `نشر · ${platform.label}` : `Publish · ${platform.label}`,
   };
 
   return (
-    <div className="mb-3 rounded border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-3 text-xs text-[var(--vigil-text)]">
+    <div
+      className={
+        layout === "page"
+          ? "h-full overflow-auto bg-[var(--vigil-panel)] p-4 text-xs text-[var(--vigil-text)]"
+          : "mb-3 rounded border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-3 text-xs text-[var(--vigil-text)]"
+      }
+    >
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--vigil-muted)]">
@@ -72,7 +86,11 @@ export function SupportTicketPanel() {
           {ticket ? (
             <span className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[10px] text-[var(--vigil-muted)]">
               {ticket.status}
-              {ticket.adoWorkItemId ? ` · #${ticket.adoWorkItemId}` : ""}
+              {ticket.publishedId
+                ? ` · #${ticket.publishedId}`
+                : ticket.adoWorkItemId
+                  ? ` · #${ticket.adoWorkItemId}`
+                  : ""}
             </span>
           ) : null}
         </div>
@@ -91,13 +109,15 @@ export function SupportTicketPanel() {
           >
             {t.newDraft}
           </button>
-          <button
-            type="button"
-            className="rounded border border-[var(--vigil-border)] px-2 py-1 hover:bg-[var(--vigil-hover)]"
-            onClick={() => setPanelOpen(false)}
-          >
-            {t.close}
-          </button>
+          {layout === "chat" ? (
+            <button
+              type="button"
+              className="rounded border border-[var(--vigil-border)] px-2 py-1 hover:bg-[var(--vigil-hover)]"
+              onClick={() => setPanelOpen(false)}
+            >
+              {t.close}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -386,11 +406,21 @@ export function SupportTicketPanel() {
                     await persistActive();
                     const latest =
                       useSupportTicketStore.getState().activeTicket || ticket;
-                    const result = await publishSupportTicketToAdo(latest);
+                    const result = await publishSupportTicket(
+                      latest,
+                      platformId,
+                    );
+                    const remoteId =
+                      typeof result.id === "number"
+                        ? result.id
+                        : Number(result.id) || undefined;
                     useSupportTicketStore.getState().updateActive({
                       status: "published",
-                      adoWorkItemId: result.id,
+                      adoWorkItemId: remoteId,
                       adoUrl: result.url,
+                      publishedPlatform: result.platformId,
+                      publishedId: String(result.id),
+                      publishedUrl: result.url,
                     });
                     await persistActive();
                     setNote(

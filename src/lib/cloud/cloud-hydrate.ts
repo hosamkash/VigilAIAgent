@@ -105,7 +105,8 @@ export async function hydrateLocalChatsFromCloud(
       id: chat.id,
       title: chat.title || "Chat",
       messages: messages.map(cloudMessageToLocal),
-      // Keep open/archived state for existing; new imports → history
+      // Keep open/archived for existing tabs. New cloud recents go to History
+      // (Firestore SoR for content; avoid opening every Recent as a tab).
       archived: existed ? Boolean(local?.archived) : true,
       draft: "",
       titleCustom: false,

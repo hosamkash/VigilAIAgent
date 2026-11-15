@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Sparkles, X } from "lucide-react";
-import { runInlineEdit } from "../lib/inline-edit";
+import { previewUnifiedDiff, runInlineEdit } from "../lib/inline-edit";
 import { replaceMonacoSelection } from "../lib/monaco-bridge";
 import { notify } from "../lib/ide-commands";
 import { useInlineEditStore } from "../store/inlineEditStore";
@@ -11,9 +11,12 @@ export function InlineEditPopover() {
   const error = useInlineEditStore((s) => s.error);
   const instruction = useInlineEditStore((s) => s.instruction);
   const target = useInlineEditStore((s) => s.target);
+  const preview = useInlineEditStore((s) => s.preview);
+  const previewModel = useInlineEditStore((s) => s.previewModel);
   const setInstruction = useInlineEditStore((s) => s.setInstruction);
   const setBusy = useInlineEditStore((s) => s.setBusy);
   const setError = useInlineEditStore((s) => s.setError);
+  const setPreview = useInlineEditStore((s) => s.setPreview);
   const close = useInlineEditStore((s) => s.close);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -25,7 +28,7 @@ export function InlineEditPopover() {
 
   if (!open || !target) return null;
 
-  async function submit() {
+  async function generate() {
     if (busy) return;
     setBusy(true);
     setError(null);
@@ -40,20 +43,31 @@ export function InlineEditPopover() {
         before: target!.before,
         after: target!.after,
       });
-      if (!replaceMonacoSelection(code)) {
-        throw new Error("Could not apply edit in the editor");
-      }
-      notify(`Inline edit applied (${model})`);
-      close();
+      setPreview(code, model);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
   }
 
+  function applyPreview() {
+    if (!preview) return;
+    if (!replaceMonacoSelection(preview)) {
+      setError("Could not apply edit in the editor");
+      return;
+    }
+    notify(`Inline edit applied (${previewModel || "model"})`);
+    close();
+  }
+
+  const diff =
+    preview && target
+      ? previewUnifiedDiff(target.text, preview, target.path)
+      : "";
+
   return (
     <div
-      className="absolute z-30 w-[min(420px,calc(100%-16px))] rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-2 shadow-xl"
+      className="absolute z-30 w-[min(520px,calc(100%-16px))] rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-2 shadow-xl"
       style={{ top: target.top, left: target.left }}
       onMouseDown={(e) => e.preventDefault()}
     >
@@ -79,7 +93,8 @@ export function InlineEditPopover() {
         className="flex gap-1.5"
         onSubmit={(e) => {
           e.preventDefault();
-          void submit();
+          if (preview) applyPreview();
+          else void generate();
         }}
       >
         <input
@@ -101,14 +116,21 @@ export function InlineEditPopover() {
           disabled={busy || !instruction.trim()}
           className="shrink-0 rounded bg-[var(--vigil-accent)] px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-40"
         >
-          {busy ? "…" : "Apply"}
+          {busy ? "…" : preview ? "Apply" : "Preview"}
         </button>
       </form>
+      {preview ? (
+        <pre className="mt-1.5 max-h-40 overflow-auto rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] p-1.5 font-mono text-[10px] text-[var(--vigil-text)]">
+          {diff}
+        </pre>
+      ) : null}
       {error ? (
         <div className="mt-1.5 text-[11px] text-[var(--vigil-danger)]">{error}</div>
       ) : (
         <div className="mt-1 text-[10px] text-[var(--vigil-muted)]">
-          Enter to apply · Esc to cancel · ⌘K / Ctrl+K
+          {preview
+            ? "Enter to apply · change instruction to regenerate · Esc to cancel"
+            : "Enter to preview diff · Esc to cancel · ⌘K / Ctrl+K"}
         </div>
       )}
     </div>

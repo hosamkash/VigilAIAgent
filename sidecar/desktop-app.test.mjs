@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectDesktopAppExe,
+  filterDiscoveredApps,
   getDesktopSession,
   isWindowsDesktopHost,
   listAppProfiles,
@@ -55,5 +56,18 @@ describe("desktop-app bridge", () => {
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("filters discovered apps by name", () => {
+    const hits = filterDiscoveredApps(
+      [
+        { name: "CompanyERP", path: "C:\\\\Apps\\\\ERP.exe" },
+        { name: "Notepad", path: "C:\\\\Windows\\\\notepad.exe" },
+      ],
+      "erp",
+      10,
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].name).toBe("CompanyERP");
   });
 });

@@ -38,6 +38,9 @@ export type SupportTicket = {
   /** Filled after ADO publish. */
   adoWorkItemId?: number;
   adoUrl?: string;
+  publishedPlatform?: string;
+  publishedId?: string;
+  publishedUrl?: string;
 };
 
 const TICKET_TYPES = new Set<SupportTicketType>([
@@ -163,6 +166,9 @@ export function normalizeSupportTicket(raw: unknown): SupportTicket {
     adoWorkItemId:
       typeof o.adoWorkItemId === "number" ? o.adoWorkItemId : undefined,
     adoUrl: String(o.adoUrl || "").trim() || undefined,
+    publishedPlatform: String(o.publishedPlatform || "").trim() || undefined,
+    publishedId: String(o.publishedId || "").trim() || undefined,
+    publishedUrl: String(o.publishedUrl || o.adoUrl || "").trim() || undefined,
   };
 }
 
@@ -197,7 +203,11 @@ export function formatSupportTicketMarkdown(ticket: SupportTicket): string {
     t.severity ? `**Severity:** ${t.severity}` : null,
     t.status ? `**Status:** ${t.status}` : null,
     t.connectionLabel ? `**Connection:** ${t.connectionLabel}` : null,
-    t.adoWorkItemId ? `**ADO:** #${t.adoWorkItemId}` : null,
+    t.publishedUrl
+      ? `**Published:** ${t.publishedUrl}`
+      : t.adoWorkItemId
+        ? `**ADO:** #${t.adoWorkItemId}`
+        : null,
   ]
     .filter(Boolean)
     .join(" · ");

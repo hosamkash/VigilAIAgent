@@ -15,7 +15,7 @@ service cloud.firestore {
     }
 
     function noCodeUploadKeys() {
-      // Reject documents that try to smuggle source trees / indexes.
+      // Reject documents that try to smuggle source trees / indexes / browser secrets.
       return !request.resource.data.keys().hasAny([
         'sourceTree',
         'gitObjects',
@@ -24,7 +24,12 @@ service cloud.firestore {
         'workspaceFiles',
         'deepIndex',
         'repoZip',
-        'binaryBlob'
+        'binaryBlob',
+        'pageHtml',
+        'cookies',
+        'password',
+        'screenshot',
+        'screenshotDataUrl'
       ]);
     }
 
@@ -127,6 +132,18 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
         && noCodeUploadKeys();
+    }
+
+    // Vigil Browser history — url/title/visitedAt only (no page body / cookies).
+    match /browserVisits/{visitId} {
+      allow read, update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && noCodeUploadKeys()
+        && request.resource.data.keys().hasOnly([
+          'id', 'userId', 'url', 'title', 'visitedAt', 'surface'
+        ]);
     }
   }
 }

@@ -11,7 +11,7 @@ import {
   spawnSidecar,
 } from "./secure-storage";
 
-const SIDECAR_BASE = "http://127.0.0.1:47821";
+import { sidecarBaseUrl } from "./sidecar-endpoint";
 
 export type DbEngine = "mssql" | "postgres";
 
@@ -27,6 +27,9 @@ export type DbProfile = {
   encrypt?: boolean;
   trustServerCertificate?: boolean;
   sslMode?: string;
+  favorite?: boolean;
+  lastDatabase?: string;
+  updatedAt?: number;
 };
 
 export type SqlSessionInfo = {
@@ -94,7 +97,7 @@ async function sqlOp(
     cwd,
   });
   const hmac = await signSidecarBody(secret, session.sessionId, body);
-  const res = await sidecarFetch(SIDECAR_BASE, {
+  const res = await sidecarFetch(sidecarBaseUrl(), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -154,6 +157,8 @@ export async function testDbConnection(input: {
 export async function connectDb(input: {
   profileId: string;
   password?: string;
+  /** Default read. Write requires explicit choice in UI. */
+  mode?: "read" | "write";
 }): Promise<SqlSessionInfo> {
   let password = input.password || "";
   if (!password && input.profileId) {
@@ -166,6 +171,7 @@ export async function connectDb(input: {
   const out = await sqlOp("connect", {
     profileId: input.profileId,
     password,
+    mode: input.mode || "read",
   });
   return (
     (out.session as SqlSessionInfo) || {
@@ -174,7 +180,7 @@ export async function connectDb(input: {
       profileId: input.profileId,
       label: null,
       database: null,
-      readOnly: true,
+      readOnly: input.mode !== "write",
     }
   );
 }
@@ -252,7 +258,7 @@ export async function listDatabasesUi(): Promise<string[]> {
 
 export async function listObjectsUi(input?: {
   schema?: string;
-  kind?: "table" | "view" | "all";
+  kind?: "table" | "view" | "all" | "procedure" | "function" | "routine";
 }): Promise<SqlCatalogObject[]> {
   const out = await sqlOp("list_objects", input as Record<string, unknown>);
   if (!Array.isArray(out.objects)) return [];
@@ -269,4 +275,99 @@ export async function describeTableUi(input: {
 }): Promise<string> {
   const out = await sqlOp("describe_table", input as Record<string, unknown>);
   return String(out.output || "");
+}
+
+export type SqlRunUiResult = {
+  output: string;
+  rowCount: number;
+  rows: Record<string, unknown>[];
+};
+
+/** Run SQL on the active Support session (read-only gated in sidecar). */
+export async function runSqlUi(input: {
+  sql: string;
+  maxRows?: number;
+}): Promise<SqlRunUiResult> {
+  const out = await sqlOp("run", {
+    sql: input.sql,
+    maxRows: input.maxRows ?? 100,
+  });
+  const rows = Array.isArray(out.rows)
+    ? (out.rows as Record<string, unknown>[])
+    : [];
+  return {
+    output: String(out.output || ""),
+    rowCount: Number(out.rowCount) || rows.length,
+    rows,
+  };
+}
+
+export async function useDatabaseUi(database: string): Promise<SqlSessionInfo> {
+  const out = await sqlOp("use_database", { database });
+  return (
+    (out.session as SqlSessionInfo) || {
+      connected: true,
+      engine: null,
+      profileId: null,
+      label: null,
+      database,
+      readOnly: true,
+    }
+  );
+}
+
+export async function setSqlModeUi(input: {
+  mode: "read" | "write";
+  confirm?: boolean;
+}): Promise<SqlSessionInfo> {
+  const out = await sqlOp("set_mode", {
+    mode: input.mode,
+    confirm: input.confirm === true,
+  });
+  return (
+    (out.session as SqlSessionInfo) || {
+      connected: true,
+      engine: null,
+      profileId: null,
+      label: null,
+      database: null,
+      readOnly: input.mode !== "write",
+    }
+  );
+}
+
+export async function getObjectDdlUi(input: {
+  table: string;
+  schema?: string;
+  kind?: string;
+}): Promise<{ ddl: string; kind: string }> {
+  const out = await sqlOp("get_object_ddl", input as Record<string, unknown>);
+  return {
+    ddl: String(out.ddl || out.output || ""),
+    kind: String(out.kind || ""),
+  };
+}
+
+export async function explainSqlUi(input: {
+  sql: string;
+  analyze?: boolean;
+  confirmAnalyze?: boolean;
+}): Promise<{ output: string }> {
+  const out = await sqlOp("explain", {
+    sql: input.sql,
+    analyze: input.analyze === true,
+    confirmAnalyze: input.confirmAnalyze === true,
+  });
+  return { output: String(out.output || "") };
+}
+
+export async function patchDbProfileUi(
+  profileId: string,
+  patch: { favorite?: boolean; lastDatabase?: string },
+): Promise<DbProfile> {
+  const out = await sqlOp("profiles_patch", {
+    profileId,
+    ...patch,
+  });
+  return out.profile as DbProfile;
 }

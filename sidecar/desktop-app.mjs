@@ -551,3 +551,76 @@ export async function app_profiles_list(cwd = process.cwd()) {
 export async function app_profiles_save(input = {}, cwd = process.cwd()) {
   return saveAppProfile(cwd, input);
 }
+
+export function filterDiscoveredApps(apps, query, limit = 40) {
+  const q = String(query || "").trim().toLowerCase();
+  const cap = Math.min(80, Math.max(1, Number(limit) || 40));
+  const list = Array.isArray(apps) ? apps : [];
+  const matched = q
+    ? list.filter((a) =>
+        `${a?.name || ""} ${a?.path || ""}`.toLowerCase().includes(q),
+      )
+    : list;
+  return matched.slice(0, cap);
+}
+
+async function listCandidateApps() {
+  const found = [];
+  if (process.platform === "darwin") {
+    const dir = "/Applications";
+    const names = await fs.readdir(dir).catch(() => []);
+    for (const name of names) {
+      if (!name.toLowerCase().endsWith(".app")) continue;
+      found.push({
+        name: name.replace(/\.app$/i, ""),
+        path: path.join(dir, name),
+      });
+    }
+    return found;
+  }
+  if (process.platform !== "win32") return found;
+  const roots = [
+    process.env.ProgramFiles,
+    process.env["ProgramFiles(x86)"],
+    process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, "Programs")
+      : "",
+  ].filter(Boolean);
+  for (const root of roots) {
+    const top = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+    for (const ent of top.slice(0, 100)) {
+      if (!ent.isDirectory()) continue;
+      const folder = path.join(root, ent.name);
+      const files = await fs.readdir(folder).catch(() => []);
+      const exe = files.find((f) => f.toLowerCase().endsWith(".exe"));
+      if (exe) {
+        found.push({
+          name: path.basename(exe, ".exe"),
+          path: path.join(folder, exe),
+        });
+      }
+    }
+  }
+  return found;
+}
+
+export async function app_discover_installed(input = {}) {
+  const apps = filterDiscoveredApps(
+    await listCandidateApps(),
+    input.query || input.name || "",
+    input.max ?? 40,
+  );
+  if (!apps.length) {
+    return {
+      ok: true,
+      apps: [],
+      output:
+        "No installed apps matched. On Windows we scan Program Files (one folder deep). Save a profile with app_profiles_save if you know the EXE path.",
+    };
+  }
+  return {
+    ok: true,
+    apps,
+    output: apps.map((a) => `- ${a.name}\n  ${a.path}`).join("\n"),
+  };
+}

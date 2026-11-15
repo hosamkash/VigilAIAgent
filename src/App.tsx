@@ -15,6 +15,7 @@ import { useSettingsStore } from "./store/settingsStore";
 import { useLayoutStore } from "./store/layoutStore";
 import { useCostStore } from "./store/costStore";
 import {
+  CHAT_PANE_MIN_PX,
   DEFAULT_LAYOUT,
   mergeHorizontalSizes,
   sizesToPercents,
@@ -45,6 +46,9 @@ function IdeShell() {
   }, []);
 
   useEffect(() => {
+    void import("./lib/cloud/vigil-web-url").then(({ getConfiguredVigilWebUrl }) => {
+      getConfiguredVigilWebUrl();
+    });
     return useCloudAuthStore.getState().init();
   }, []);
 
@@ -152,7 +156,7 @@ function IdeShell() {
             </div>
           </Allotment.Pane>
           <Allotment.Pane
-            minSize={300}
+            minSize={CHAT_PANE_MIN_PX}
             preferredSize={`${layoutSizes.horizontal[2]}%`}
             visible={chatVisible}
           >
@@ -186,17 +190,25 @@ function App() {
     if (params.get("agents") === "1") {
       useLayoutStore.setState({ sidebarVisible: false, bottomVisible: false });
     }
-    let stop: (() => void) | undefined;
+    const stops: Array<() => void> = [];
     void import("./lib/cloud/deep-link-boot")
       .then(({ bootVigilDeepLinks }) => bootVigilDeepLinks())
       .then((un) => {
-        stop = un;
+        stops.push(un);
       })
       .catch(() => {
         /* offline / no Tauri */
       });
+    void import("./lib/open-folder-boot")
+      .then(({ bootOpenFolderFromOs }) => bootOpenFolderFromOs())
+      .then((un) => {
+        stops.push(un);
+      })
+      .catch(() => {
+        /* no Tauri */
+      });
     return () => {
-      stop?.();
+      for (const u of stops) u();
     };
   }, [refreshLogs, initLayout]);
 

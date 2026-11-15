@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  CHAT_PANE_MIN_PX,
   CHAT_VISIBLE_KEY,
   DEFAULT_LAYOUT,
   loadLayoutSizes,
@@ -17,6 +18,9 @@ export type SidebarView =
   | "search"
   | "scm"
   | "run"
+  | "database"
+  | "tickets"
+  | "browser"
   | "extensions"
   | "history";
 
@@ -85,7 +89,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     set({ bottomHeight: h });
   },
   setChatWidth: (chatWidth) =>
-    set({ chatWidth: Math.min(560, Math.max(280, chatWidth)) }),
+    set({ chatWidth: Math.min(560, Math.max(CHAT_PANE_MIN_PX, chatWidth)) }),
   setHorizontalSizes: (horizontal) =>
     set((s) => {
       const layoutSizes = { ...s.layoutSizes, horizontal };

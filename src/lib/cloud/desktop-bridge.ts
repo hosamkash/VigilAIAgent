@@ -24,6 +24,21 @@ export type VigilBridgeMessage =
       type: "vigil:execution-status";
       planId: string;
       status: string;
+      done?: number;
+      total?: number;
+    }
+  | {
+      source: typeof VIGIL_BRIDGE_SOURCE;
+      type: "vigil:entitlement-updated";
+      planTier?: string;
+      tokenBalance?: number;
+      entitlements?: string[];
+    }
+  | {
+      source: typeof VIGIL_BRIDGE_SOURCE;
+      type: "vigil:plan-updated";
+      planId: string;
+      status?: string;
     };
 
 export function isVigilBridgeMessage(data: unknown): data is VigilBridgeMessage {

@@ -6,6 +6,8 @@ import {
   monacoSeverityToProblem,
   type EditorProblem,
 } from "./editor-diagnostics";
+import { installMonacoEditorOpener } from "./monaco-editor-opener";
+import { monacoResourceToPath } from "./monaco-file-uri";
 import { useTerminalStore } from "../store/terminalStore";
 
 let configured = false;
@@ -14,6 +16,7 @@ let markerSub: { dispose: () => void } | null = null;
 export function configureMonacoTsJs(monaco: Monaco): void {
   if (configured) return;
   configured = true;
+  installMonacoEditorOpener(monaco);
 
   const compilerOptions = {
     target: monaco.languages.typescript.ScriptTarget.ESNext,
@@ -42,7 +45,7 @@ export function configureMonacoTsJs(monaco: Monaco): void {
     const markers = monaco.editor.getModelMarkers({});
     const problems: EditorProblem[] = [];
     for (const marker of markers) {
-      const path = marker.resource?.fsPath || marker.resource?.path || "";
+      const path = monacoResourceToPath(marker.resource || {}) || "";
       if (!path || !isTsJsPath(path)) continue;
       if (!marker.message) continue;
       problems.push({

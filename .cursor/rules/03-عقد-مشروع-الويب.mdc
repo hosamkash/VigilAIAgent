@@ -33,7 +33,7 @@ alwaysApply: true
 **What this file is:** the **agreed product + integration contract** for the **separate Vigil Web codebase**.  
 **What it is not:** implementation in VigilAIAgent (desktop). Desktop lives here; web is a sibling product that shares Firebase and Plan artifacts.
 
-**Status:** SPEC / PLANNING ONLY — no web implementation from this repo until the user starts Vigil Web execution.  
+**Status:** EXECUTING in sibling repo `Vigil-AI-Agent-Web` — user shell + Kashier Test shipped; Live keys ops.  
 **Sibling product:** VigilAIAgent (Tauri desktop) — local tools, Execute, IDE.  
 **Integration hub:** Firebase Auth + Firestore (online SoR).  
 **Parent continuum doc:** `.cursor/rules/02-جسر-السحابة-الموحد.mdc`  
@@ -117,9 +117,9 @@ One login, one wallet, one history continuum — different tools per mode.
 
 **Shell**
 - [ ] Strong **brand identity** (logo/name hero in empty states; package/plan badge by avatar)
-- [ ] Persistent **left sidebar** + main canvas (chat / plan / library detail)
+- ✅ Persistent **left sidebar** + main canvas (chat / plan / library detail)
 - [ ] Optional right rail later (citations, plan summary) — Phase 1 can skip
-- [ ] Mobile: sidebar as drawer; bottom-safe composer
+- ✅ Mobile: sidebar as drawer; bottom-safe composer
 
 **Sidebar — must (Phase 1)**
 | Item | Behavior |
@@ -141,23 +141,23 @@ One login, one wallet, one history continuum — different tools per mode.
 | **Settings** | Language (AR/EN), default model, notifications, theme |
 
 **Sidebar — should (Phase 1.5)**
-- 🟨 **Schedule** — reminders stub (`/app/schedule` + Firestore `schedules`); digests later
+- 🟨 **Schedule** — Firestore reminders + optional `planId` / Continue on Desktop; digests later
 - ✅ **Starred / Pinned**
 - ✅ **Archived**
 - [ ] **Models** favorites / recent
-- [ ] **Help / What’s new**
+- ✅ **Help / What’s new**
 
 **Sidebar — Vigil differentiators (keep visible)**
-- 🟨 **Desktop Execute** status chip (live via `vigil:execution-status` in embed)
-- 🟨 **Continue on Desktop** (`vigil://continue` CTA on plan detail; QR later)
+- ✅ **Desktop Execute** status chip (live via `vigil:execution-status` + done/total)
+- ✅ **Continue on Desktop** (`vigil://continue` CTA on plan detail; `vigil://chat` on chat; QR later)
 - [ ] Optional **linked workspace hint** (display name only — never file contents)
 
 **Main canvas**
 - 🟨 Streaming chat; multi-model picker (Admin-enabled providers; package entitlement gate polish later)
-- [ ] Attach **Library** assets only (not local repo paths)
-- 🟨 Plan draft panel: edit/reorder steps → Approve (writes Firestore plan status)
-- 🟨 Empty states teach continuum: “Plan here → Execute on desktop”
-- 🟨 Arabic + English first-class (RTL layout when AR)
+- ✅ Attach **Library** assets only (not local repo paths) — «شات» from library item
+- ✅ Plan draft panel: edit/reorder steps → Approve (writes Firestore plan status); PlanLiveStatus step checklist
+- ✅ Empty states teach continuum: “Plan here → Execute on desktop” (+ Support/Secure/Download links)
+- ✅ Arabic + English first-class (RTL layout when AR; Settings locale switch)
 
 > **عربي:** لوحة الأدمن
 
@@ -373,20 +373,20 @@ Required product loop:
 Desktop will also host Vigil Web (WebView / iframe / embedded browser) so history UX is identical.
 
 Web must support:
-- 🟨 **Embed-safe mode** (`?embed=1` + `/app` SiteNavGate) — hide marketing chrome
-- 🟨 **Auth token / session bridge** — `/embed/auth` + desktop idToken → `/api/session`
+- ✅ **Embed-safe mode** (`?embed=1` sticky on sidebar nav + SiteNavGate) — hide marketing chrome
+- ✅ **Auth token / session bridge** — `/embed/auth` + desktop idToken → `/api/session`
 - 🟨 **postMessage / bridge events**:
  - ✅ `vigil:auth-handoff` / `vigil:auth-request` / `vigil:session-ready`
- - [ ] `vigil:entitlement-updated` (tier / wallet after pay or free grant)
- - [ ] `vigil:plan-approve` / `vigil:plan-updated`
+ - 🟨 `vigil:entitlement-updated` (type in bridge; emit after checkout later)
+ - ✅ `vigil:plan-updated` (web approve/save → desktop openPlan/refresh; desktop persist → iframe)
  - ✅ `vigil:request-execute` → desktop Plan Mode Execute
- - 🟨 `vigil:execution-status` ← embed chip + Firestore + web PlanLiveStatus poll
-- 🟨 Deep links: `/login`, `/pricing`, `/plans/:id`, `/chats/:id`, `/projects/:id` (checkout later)
-- [ ] “Continue on Desktop” that opens/focuses VigilAIAgent when installed
+ - ✅ `vigil:execution-status` ← embed chip (done/total) + Firestore + PlanLiveStatus checklist
+- ✅ Deep links: `/login`, `/pricing`, `/plans/:id`, `/chats/:id` + `vigil://continue` / `vigil://chat`
+- ✅ “Continue on Desktop” deep link CTAs (plan + chat)
 
 Desktop must:
-- [ ] Show same account history via this embed (preferred over a second native chat SoR UI)
-- [ ] Keep local Execute / terminal / LSP outside the iframe
+- 🟨 Show same account history via this embed (preferred over a second native chat SoR UI)
+- ✅ Keep local Execute / terminal / LSP outside the iframe
 - [ ] Refresh entitlements after web checkout (listener or poll on `subscriptions` / `wallets`)
 
 ---
@@ -411,13 +411,13 @@ Desktop must:
 - [ ] Firebase Auth + Firestore schema + security rules
 - [ ] User shell with sidebar must-items (incl. Pricing / Upgrade)
 - [ ] Free / trial package grant on signup (Admin-configurable)
-- 🟨 Packages catalog + checkout with **Egypt method picker** (Card/Meeza, InstaPay, wallets, Fawry) — sandbox OK; Kashier Test wired
-- 🟨 Payments abstraction + **Kashier** adapter + signed webhook (`x-kashier-signature`) — Paymob/FawryPay later
+- 🟨 Packages catalog + checkout with **Egypt method picker** (Card/Meeza, InstaPay, wallets, Fawry) — sandbox OK; Kashier Test/Live wired
+- ✅ Payments abstraction + **Kashier** adapter (Test + Live keys) + signed webhook (`x-kashier-signature`) — Paymob/FawryPay later
 - 🟨 Auto tier activation → Admin + Firestore ledger row (pending→paid for async rails) — Kashier SUCCESS webhook
 - [ ] Chat + messages + plans CRUD against Firestore
-- [ ] Admin skeleton: users, packages, payments list, attach package, basic usage
-- [ ] Desktop login handoff + embed mode + deep links
-- [ ] AR/EN shell
+- ✅ Admin skeleton: users, packages, purchases + payments ledger nav, attach package, seed (+ `secure_addon`)
+- ✅ Desktop login handoff + embed mode + deep links
+- 🟨 AR/EN shell (AR-first; EN polish later)
 
 **Out**
 - [ ] Every BNPL/kiosk variant polished on day one (stage after Card + InstaPay + wallets + Fawry core)
@@ -473,7 +473,7 @@ Desktop must:
 - ✅ Web repo path: `/Users/user/Documents/Work/Hosam Projects/React/Vigil-AI-Agent-Web` (`hosamkash/Vigil-AI-Agent-Web`, branch `01-Build-WebSite`); hosting URL still open  
 - [ ] Stack choice for web (if not already started) — inventory existing preliminary UI at implement time  
 - 🟨 Auth handoff: iframe `postMessage` idToken → `/api/session` (custom protocol later if needed)  
-- 🟨 **Primary Egypt aggregator:** **Kashier** (Test MID wired) — confirm Live methods Card+Meeza + wallets + InstaPay + Fawry on MID  
+- ✅ **Primary Egypt aggregator:** **Kashier** (Test + Live dual keys; `KASHIER_MODE=live`) — confirm Live methods on MID  
 - [ ] **Fawry:** via primary aggregator vs direct **FawryPay** second adapter  
 - [ ] Optional intl rail (Stripe/Paddle) for non-EG — after Egypt local is live  
 - [ ] Currencies: EG catalog **EGP** default; multi-currency later  
@@ -500,7 +500,10 @@ _Append dated ideas; promote into sections when accepted._
 - 2026-11-11: **Vigil Secure** sellable add-on — authorized web security assist + reports (`06-الأمان-الدفاعي-للويب.mdc`). 
 - 2026-11-12: **Kashier Test** adapter — sessions v3 + Payment API Key HMAC webhook; keys in `.env.local` only; user sets dashboard Webhook = `{VIGIL_PUBLIC_URL}/api/payments/webhook`. 
 - 2026-11-12: Projects folder detail + assign; Search message hits. 
-- 
+- 2026-11-13: Continuum polish — sticky `embed=1` sidebar; PlanLiveStatus full step list; Support/DB + Secure app pages; Admin payments nav; seed `secure_addon` + `feature.vigilSecure`; `vigil://chat` CTA; desktop execution-status done/total.
+- 2026-11-13: **Kashier Live** dual keys + webhook verify both Payment API Keys; **grantPlan** copies entitlements + wallets + subscriptions; return-page poll + `vigil:entitlement-updated`. 
+- 2026-11-14: Library kinds + copy/delete; Schedule optional planId + Continue on Desktop; `vigil:plan-updated` from Plan editor.
+- 2026-11-14: Admin Settings + desktop Account button for `env:vercel:push`; stamp `.vigil/vercel-env-last-push.json` (no secret values). 
 
 ---
 

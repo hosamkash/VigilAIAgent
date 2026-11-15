@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, expect, it } from "vitest";
 import {
   formatSupportTicketMarkdown,
   normalizeSupportTicket,
@@ -15,11 +14,11 @@ describe("support-ticket sidecar", () => {
       evidence: ["dbo.SalesReport"],
       priority: "P2",
     });
-    assert.equal(t.type, "Bug");
-    assert.deepEqual(t.stepsToReproduce, ["Open report", "Pick today"]);
+    expect(t.type).toBe("Bug");
+    expect(t.stepsToReproduce).toEqual(["Open report", "Pick today"]);
     const md = formatSupportTicketMarkdown(t);
-    assert.match(md, /# Report empty/);
-    assert.match(md, /dbo\.SalesReport/);
-    assert.match(md, /\*\*Priority:\*\* P2/);
+    expect(md).toMatch(/# Report empty/);
+    expect(md).toMatch(/dbo\.SalesReport/);
+    expect(md).toMatch(/\*\*Priority:\*\* P2/);
   });
 });

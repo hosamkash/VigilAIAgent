@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Settings } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Settings, X } from "lucide-react";
 import {
   voicesForGender,
   type ReplyLength,
@@ -180,52 +181,75 @@ function ProjectRulesOption() {
 
 export function ChatQuickSettingsButton() {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    const onPointer = (event: MouseEvent) => {
-      if (rootRef.current?.contains(event.target as Node)) return;
-      setOpen(false);
-    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
-    const timer = window.setTimeout(() => {
-      window.addEventListener("mousedown", onPointer);
-      window.addEventListener("keydown", onKey);
-    }, 0);
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("mousedown", onPointer);
-      window.removeEventListener("keydown", onKey);
-    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative shrink-0">
+    <div className="shrink-0">
       <button
         type="button"
         title="Chat settings"
         aria-label="Chat settings"
         aria-expanded={open}
-        className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] text-[var(--vigil-muted)] hover:bg-[var(--vigil-hover)] hover:text-[var(--vigil-text)]"
+        aria-haspopup="dialog"
+        className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] text-[var(--vigil-muted)] hover:bg-[var(--vigil-hover)] hover:text-[var(--vigil-text)]"
         onClick={() => setOpen((value) => !value)}
       >
-        <Settings className="h-3.5 w-3.5" />
+        <Settings className="h-4 w-4" />
       </button>
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Quick chat settings"
-          className="absolute bottom-[calc(100%+6px)] left-0 z-40 w-[18.5rem] rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-3 shadow-xl"
-        >
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--vigil-muted)]">
-            Quick settings
-          </div>
-          <ChatPreferencesFields compact />
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 p-4"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setOpen(false);
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="chat-quick-settings-title"
+              className="max-h-[min(32rem,calc(100vh-2rem))] w-full max-w-md overflow-y-auto rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-4 shadow-2xl"
+            >
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div
+                  id="chat-quick-settings-title"
+                  className="text-sm font-semibold text-[var(--vigil-text)]"
+                >
+                  Chat settings
+                </div>
+                <button
+                  type="button"
+                  title="Close"
+                  aria-label="Close"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-hover)] hover:text-[var(--vigil-text)]"
+                  onClick={() => setOpen(false)}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <ChatPreferencesFields />
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-md bg-[var(--vigil-accent)] px-3 py-1.5 text-xs !text-white"
+                  onClick={() => setOpen(false)}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

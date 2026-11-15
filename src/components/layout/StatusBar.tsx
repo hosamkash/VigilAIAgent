@@ -17,10 +17,14 @@ import { useCostStore } from "../../store/costStore";
 import { useEditorStatusStore } from "../../store/editorStatusStore";
 import { useEditorTabsStore } from "../../store/editorTabsStore";
 import { useExplorerStore } from "../../store/explorerStore";
+import { useScmReposStore } from "../../store/scmReposStore";
 import { useLayoutStore } from "../../store/layoutStore";
 import { useTerminalStore } from "../../store/terminalStore";
 import { useWorkspaceIndexStore } from "../../store/workspaceIndexStore";
 import { useDesktopAppStore } from "../../store/desktopAppStore";
+import { useCloudAuthStore } from "../../store/cloudAuthStore";
+import { useVercelEnvStore } from "../../store/vercelEnvStore";
+import { useSettingsStore } from "../../store/settingsStore";
 import { useSqlSessionStore } from "../../store/sqlSessionStore";
 import { reindexLocalCodeIndex } from "../../lib/cline-engine";
 import { notify } from "../../lib/ide-commands";
@@ -62,7 +66,12 @@ function StatusButton({
 }
 
 export function StatusBar() {
-  const root = useExplorerStore((s) => s.root);
+  const workspaceRoot = useExplorerStore((s) => s.root);
+  const extraRoots = useExplorerStore((s) => s.extraRoots);
+  const scmRepos = useScmReposStore((s) => s.repos);
+  const activeRepoId = useScmReposStore((s) => s.activeRepoId);
+  const activeScm = scmRepos.find((r) => r.id === activeRepoId) || scmRepos[0];
+  const root = activeScm?.rootPath || workspaceRoot;
   const tabs = useEditorTabsStore((s) => s.tabs);
   const activeId = useEditorTabsStore((s) => s.activeId);
   const caret = useEditorStatusStore((s) => s.caret);
@@ -82,10 +91,24 @@ export function StatusBar() {
   const sqlLabel = useSqlSessionStore((s) => s.label);
   const sqlEngine = useSqlSessionStore((s) => s.engine);
   const sqlDb = useSqlSessionStore((s) => s.database);
-  const clearSql = useSqlSessionStore((s) => s.clear);
+  const sqlReadOnly = useSqlSessionStore((s) => s.readOnly);
+  const cloudUser = useCloudAuthStore((s) => s.user);
+  const cloudBilling = useCloudAuthStore((s) => s.billing);
+  const cloudEmail = cloudUser?.email?.trim() || "";
+  const vercelPushed = useVercelEnvStore((s) => s.status?.pushed === true);
+  const vercelKnown = useVercelEnvStore((s) => s.status != null);
+  const refreshVercel = useVercelEnvStore((s) => s.refresh);
+
+  useEffect(() => {
+    void refreshVercel();
+  }, [refreshVercel]);
   const [git, setGit] = useState<{ status: GitStatus; head: string | null } | null>(
     null,
   );
+
+  useEffect(() => {
+    useScmReposStore.getState().syncFromWorkspace(workspaceRoot, extraRoots);
+  }, [workspaceRoot, extraRoots]);
 
   const active = tabs.find((tab) => tab.id === activeId) ?? null;
   const fileTabs = tabs.filter((tab) => tab.mode === "file");
@@ -144,8 +167,17 @@ export function StatusBar() {
               useLayoutStore.getState().showSidebar("scm");
             }}
           >
-            <GitBranch className="h-3 w-3" aria-hidden />
+            {activeScm ? (
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ background: activeScm.color }}
+                title={activeScm.displayName}
+              />
+            ) : (
+              <GitBranch className="h-3 w-3" aria-hidden />
+            )}
             <span className="max-w-[180px] truncate">
+              {activeScm ? `${activeScm.displayName} · ` : ""}
               {branch}
               {sync}
             </span>
@@ -155,6 +187,42 @@ export function StatusBar() {
           <span className="max-w-[180px] truncate px-1.5" title={root}>
             {projectName(root)}
           </span>
+        )}
+        {cloudEmail && (
+          <button
+            type="button"
+            title={`Vigil Cloud · ${cloudEmail}\nClick to open the web shell (same Firestore history)`}
+            className="flex h-[22px] max-w-[200px] shrink-0 items-center rounded px-1.5 text-[var(--vigil-accent)] hover:bg-[var(--vigil-hover)]"
+            onClick={() => void runCommand("view.cloud")}
+          >
+            <span className="truncate">Cloud: {cloudEmail}</span>
+          </button>
+        )}
+        {cloudEmail && cloudBilling && (
+          <button
+            type="button"
+            title={`Wallet ${cloudBilling.tokenBalance.toLocaleString()} · ${cloudBilling.planTier}\nOpen Pricing on Vigil Cloud`}
+            className="flex h-[22px] max-w-[160px] shrink-0 items-center rounded px-1.5 hover:bg-[var(--vigil-hover)] hover:text-[var(--vigil-text)]"
+            onClick={() => {
+              void import("../../lib/cloud/open-cloud-embed").then(({ openCloudEmbedTab }) =>
+                openCloudEmbedTab({ focus: true, nextPath: "/app/pricing" }),
+              );
+            }}
+          >
+            <span className="truncate">
+              {cloudBilling.planTier} · {cloudBilling.tokenBalance.toLocaleString()}
+            </span>
+          </button>
+        )}
+        {vercelKnown && !vercelPushed && (
+          <button
+            type="button"
+            title="Vercel Live keys have not been pushed yet.\nSettings → Account → تشغيل رفع المفاتيح"
+            className="flex h-[22px] shrink-0 items-center rounded px-1.5 text-[var(--vigil-danger)] hover:bg-[var(--vigil-hover)]"
+            onClick={() => useSettingsStore.getState().openSettingsGate()}
+          >
+            Live env: لم يُرفع
+          </button>
         )}
         {desktopAttached && (
           <button
@@ -178,15 +246,21 @@ export function StatusBar() {
         {sqlConnected && (
           <button
             type="button"
-            title={`SQL ${sqlEngine || ""} · ${sqlLabel || ""}${sqlDb ? ` · ${sqlDb}` : ""}\nClick to clear chip (ask agent sql_disconnect to close pool)`}
-            className="flex h-[22px] max-w-[220px] shrink-0 items-center gap-1 rounded px-1.5 text-[var(--vigil-accent)] hover:bg-[var(--vigil-hover)]"
+            title={`SQL ${sqlEngine || ""} · ${sqlLabel || ""}${sqlDb ? ` · ${sqlDb}` : ""} · ${sqlReadOnly ? "read-only" : "WRITE"}\nClick to open Database sidebar`}
+            className={`flex h-[22px] max-w-[260px] shrink-0 items-center gap-1 rounded px-1.5 hover:bg-[var(--vigil-hover)] ${
+              sqlReadOnly
+                ? "text-[var(--vigil-accent)]"
+                : "text-[var(--vigil-danger)]"
+            }`}
             onClick={() => {
-              clearSql();
-              notify("SQL session chip cleared. Ask the agent to sql_disconnect if still connected.");
+              useExplorerStore.getState().closeLauncher();
+              useLayoutStore.getState().showSidebar("database");
             }}
           >
             <span className="truncate">
-              SQL: {sqlLabel?.trim() || sqlEngine || "connected"}
+              SQL{sqlReadOnly ? "" : "⚠"}:{" "}
+              {sqlDb?.trim() || sqlLabel?.trim() || sqlEngine || "connected"}
+              {!sqlReadOnly ? " WRITE" : ""}
             </span>
           </button>
         )}

@@ -14,6 +14,14 @@ describe("desktop-bridge", () => {
       }),
     ).toBe(true);
     expect(isVigilBridgeMessage({ type: "vigil:auth-request" })).toBe(false);
+    expect(
+      isVigilBridgeMessage({
+        source: VIGIL_BRIDGE_SOURCE,
+        type: "vigil:plan-updated",
+        planId: "p1",
+        status: "approved",
+      }),
+    ).toBe(true);
   });
 
   it("matches vigil web origin", () => {

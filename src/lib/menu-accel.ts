@@ -21,16 +21,28 @@ export function isMacPlatform(): boolean {
   return /Mac|iPhone|iPad/.test(`${navigator.platform}${navigator.userAgent}`);
 }
 
-export function formatAccel(accel: Accel, mac = isMacPlatform()): string {
+/** Individual key chips for empty-state / help UI (OS-aware). */
+export function formatAccelParts(accel: Accel, mac = isMacPlatform()): string[] {
   if (mac) {
-    return `${accel.ctrl ? "⌃" : ""}${accel.alt ? "⌥" : ""}${accel.shift ? "⇧" : ""}${accel.mod ? "⌘" : ""}${accel.label}`;
+    const parts: string[] = [];
+    if (accel.ctrl) parts.push("⌃");
+    if (accel.alt) parts.push("⌥");
+    if (accel.shift) parts.push("⇧");
+    if (accel.mod) parts.push("⌘");
+    parts.push(accel.label);
+    return parts;
   }
   const parts: string[] = [];
   if (accel.ctrl || accel.mod) parts.push("Ctrl");
   if (accel.alt) parts.push("Alt");
   if (accel.shift) parts.push("Shift");
   parts.push(accel.label);
-  return parts.join("+");
+  return parts;
+}
+
+export function formatAccel(accel: Accel, mac = isMacPlatform()): string {
+  const parts = formatAccelParts(accel, mac);
+  return mac ? parts.join("") : parts.join("+");
 }
 
 export function accelMatches(

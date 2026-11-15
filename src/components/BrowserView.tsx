@@ -76,12 +76,34 @@ export function BrowserView({
         return;
       }
 
+      if (event.data.type === "vigil:entitlement-updated") {
+        void import("../store/cloudAuthStore").then(({ useCloudAuthStore }) =>
+          useCloudAuthStore.getState().refreshBilling(),
+        );
+        return;
+      }
+
       if (event.data.type === "vigil:request-execute") {
         const planId = event.data.planId?.trim();
         if (!planId) return;
         window.dispatchEvent(
           new CustomEvent("vigil:request-execute", { detail: { planId } }),
         );
+        return;
+      }
+
+      if (event.data.type === "vigil:plan-updated") {
+        const planId = event.data.planId?.trim();
+        if (!planId) return;
+        void import("../store/planStore").then(({ usePlanStore }) => {
+          const store = usePlanStore.getState();
+          const status = event.data.status;
+          if (status === "approved" || status === "running") {
+            void store.openPlan(planId);
+          } else {
+            void store.refreshList();
+          }
+        });
       }
     }
 
@@ -96,16 +118,21 @@ export function BrowserView({
 
   function applyNavigation(next: string, pushHistory: boolean, syncStore: boolean) {
     if (!next) return;
+    const title = browserTabTitle(next);
     setDraft(next);
     setUrl(next);
     setLoading(true);
     setFrameKey((k) => k + 1);
-    if (syncStore) updateBrowserUrl(tabId, next, browserTabTitle(next));
+    if (syncStore) updateBrowserUrl(tabId, next, title);
     if (pushHistory) {
       const hist = historyRef.current.slice(0, indexRef.current + 1);
       if (hist[hist.length - 1] !== next) hist.push(next);
       historyRef.current = hist;
       indexRef.current = hist.length - 1;
+      // Account history: url + title only (never page body / cookies).
+      void import("../store/browserHistoryStore").then(({ useBrowserHistoryStore }) =>
+        useBrowserHistoryStore.getState().recordVisit(next, title),
+      );
     }
   }
 

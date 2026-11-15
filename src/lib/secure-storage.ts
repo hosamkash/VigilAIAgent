@@ -4,6 +4,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { setSidecarPort } from "./sidecar-endpoint";
 
 export type ApiKeyProvider = "openai" | "gemini" | "anthropic";
 
@@ -326,7 +327,14 @@ export async function spawnSidecar(): Promise<{
   alreadyRunning: boolean;
   pid?: number | null;
 }> {
-  return invoke("spawn_sidecar");
+  const result = await invoke<{
+    port: number;
+    sessionId: string;
+    alreadyRunning: boolean;
+    pid?: number | null;
+  }>("spawn_sidecar");
+  if (result?.port) setSidecarPort(result.port);
+  return result;
 }
 
 export async function getWorkspaceCwd(): Promise<string> {

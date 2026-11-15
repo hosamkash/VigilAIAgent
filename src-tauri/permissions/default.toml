@@ -54,4 +54,8 @@ commands.allow = [
   "start_live_dictation",
   "stop_live_dictation",
   "live_dictation_running",
+  "take_launch_open_path",
+  "os_open_menu_status",
+  "install_os_open_menu",
+  "uninstall_os_open_menu",
 ]

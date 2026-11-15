@@ -25,11 +25,14 @@ import {
 } from "../lib/vigil-db";
 import { ChatPreferencesFields } from "./ChatQuickSettings";
 import { CloudAccountSettings } from "./CloudAccountSettings";
+import { VercelLiveCard } from "./VercelLiveCard";
 import { DesktopUiDriverCard } from "./DesktopUiDriverCard";
 import { SupportDbCard } from "./SupportDbCard";
 import { SupportActivityCard } from "./SupportActivityCard";
 import { SupportCatalogPanel } from "./SupportCatalogPanel";
+import { SupportSqlPanel } from "./SupportSqlPanel";
 import { AdoSettingsCard } from "./AdoSettingsCard";
+import { OsOpenMenuCard } from "./OsOpenMenuCard";
 import { useAgentSettingsStore } from "../store/agentSettingsStore";
 
 function AgentAutoRunSettings() {
@@ -39,6 +42,12 @@ function AgentAutoRunSettings() {
   const setCommandAllowlist = useAgentSettingsStore((s) => s.setCommandAllowlist);
   const pathDenylist = useAgentSettingsStore((s) => s.pathDenylist);
   const setPathDenylist = useAgentSettingsStore((s) => s.setPathDenylist);
+  const compactRecentCount = useAgentSettingsStore((s) => s.compactRecentCount);
+  const setCompactRecentCount = useAgentSettingsStore((s) => s.setCompactRecentCount);
+  const compactMaxChars = useAgentSettingsStore((s) => s.compactMaxChars);
+  const setCompactMaxChars = useAgentSettingsStore((s) => s.setCompactMaxChars);
+  const indexMaxFiles = useAgentSettingsStore((s) => s.indexMaxFiles);
+  const setIndexMaxFiles = useAgentSettingsStore((s) => s.setIndexMaxFiles);
   return (
     <div className="rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-4">
       <h3 className="text-sm font-semibold">Agent tools</h3>
@@ -87,6 +96,45 @@ function AgentAutoRunSettings() {
           onChange={(e) =>
             setPathDenylist(e.target.value.split("\n").map((line) => line.trim()))
           }
+        />
+      </label>
+      <label className="mt-3 block text-sm">
+        Chat memory (recent turns)
+        <input
+          type="number"
+          min={2}
+          max={20}
+          className="mt-1 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 text-[12px]"
+          value={compactRecentCount}
+          onChange={(e) => setCompactRecentCount(Number(e.target.value))}
+        />
+      </label>
+      <label className="mt-3 block text-sm">
+        Chat memory (max characters)
+        <input
+          type="number"
+          min={4000}
+          max={40000}
+          step={1000}
+          className="mt-1 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 text-[12px]"
+          value={compactMaxChars}
+          onChange={(e) => setCompactMaxChars(Number(e.target.value))}
+        />
+      </label>
+      <label className="mt-3 block text-sm">
+        Deep index max files
+        <div className="mb-1 text-xs text-[var(--vigil-muted)]">
+          Caps first-build walk (also honors <code>.gitignore</code> /{" "}
+          <code>.vigilignore</code>).
+        </div>
+        <input
+          type="number"
+          min={500}
+          max={50000}
+          step={500}
+          className="mt-1 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 text-[12px]"
+          value={indexMaxFiles}
+          onChange={(e) => setIndexMaxFiles(Number(e.target.value))}
         />
       </label>
     </div>
@@ -549,6 +597,8 @@ export function SettingsPanel() {
                 Quick switch: Light / Dark / Ocean / Forest / Sunset. Preference
                 is saved locally for next launch.
               </div>
+
+              <OsOpenMenuCard />
             </div>
           )}
 
@@ -561,6 +611,7 @@ export function SettingsPanel() {
                   Plans sync as text/steps only; your repo stays local.
                 </p>
               </div>
+              <VercelLiveCard />
               <CloudAccountSettings />
             </div>
           )}
@@ -896,6 +947,7 @@ export function SettingsPanel() {
               </div>
               <SupportDbCard />
               <SupportCatalogPanel />
+              <SupportSqlPanel />
               <SupportActivityCard />
             </div>
           )}

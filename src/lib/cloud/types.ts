@@ -101,6 +101,16 @@ export type CloudUsageEventDoc = {
   createdAt: number;
 };
 
+/** Browser visit metadata synced across devices (no page body / cookies / passwords). */
+export type CloudBrowserVisitDoc = {
+  id: string;
+  userId: string;
+  url: string;
+  title: string;
+  visitedAt: number;
+  surface: "desktop" | "web";
+};
+
 /** Forbidden keys that must never appear on cloud-bound payloads. */
 export const CLOUD_FORBIDDEN_PAYLOAD_KEYS = [
   "sourceTree",
@@ -111,4 +121,9 @@ export const CLOUD_FORBIDDEN_PAYLOAD_KEYS = [
   "deepIndex",
   "repoZip",
   "binaryBlob",
+  "pageHtml",
+  "cookies",
+  "password",
+  "screenshot",
+  "screenshotDataUrl",
 ] as const;

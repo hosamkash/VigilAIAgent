@@ -27,6 +27,8 @@ alwaysApply: true
 4. `04-دعم-فني-وقواعد-البيانات.mdc`
 5. `05-اختبار-برامج-EXE-ويندوز.mdc`
 6. `06-الأمان-الدفاعي-للويب.mdc`
+7. `07-سورس-كنترول-متعدد-المشاريع.mdc`
+8. `08-فتح-من-مستكشف-النظام.mdc`
 <!-- ===== نهاية الفهرس العربي ===== -->
 
 # VigilAIAgent — Advanced Roadmap (Living Plan)
@@ -164,40 +166,45 @@ High-level checklist:
 - 🟨 Firebase Auth shared (desktop + web Firebase; same project)
 - 🟨 Admin dashboard: customers/packages + **attach package** + payments ledger + seed free/trial/Pro
 - 🟨 User web shell: streaming chat + Plan edit + **Usage/Wallet + Pricing Egypt sandbox**
-- 🟨 Desktop login + Cloud embed; auth bridge + Execute + **plan pull**; **chat hydrate on auth restore** + embed auto-open
+- 🟨 Desktop login + Cloud embed; auth bridge + Execute + **plan pull**; **chat hydrate on auth restore** + embed auto-open + **periodic chat pull (45s)** + rename→cloud
+- 🟨 Mid-run plan steps mirrored to Firestore; web `PlanLiveStatus` shows step progress
 - [ ] Optional local cache (default not required for happy path)
 - 🟨 Unified multi-model metering on one subscription (web usageEvents + spendTokens; wallet SoR continues)
 - ✅ Never upload project source files to Firestore (guard + rules)
 - 🟨 Tests/rules for SoR + no-code-upload; embed tests later
+- ✅ Firestore-primary IDE chat canvas — signed-in History opens Vigil Cloud embed; hydrate + `vigil://chat`; VigilDB is the offline cache
 
 **Exit criteria:** See §10 in `02-جسر-السحابة-الموحد.mdc` + §9 in `03-عقد-مشروع-الويب.mdc`.  
 **Depends on:** Plan Mode artifact shape stable enough to sync (#1).
 
 > **عربي:** قسم — 2b) Support / DB Copilot (SQL Server + PostgreSQL) — DIFFERENTIATOR FOR NON-DEV ROLES
 
-### 2b) Support / DB Copilot (SQL Server + PostgreSQL) — DIFFERENTIATOR FOR NON-DEV ROLES
+### 2b) Support / DB Copilot — **PARKED LAST** (with EXE + Crystal; do not implement now)
 **Why:** Support engineers need live DB connect + schema-aware AI (not Cursor’s paste-DDL loop). Same Vigil account/web shell; **desktop/local connector** for LAN/VPN SQL.  
 **Full focused spec:** `.cursor/rules/04-دعم-فني-وقواعد-البيانات.mdc`
 
 High-level checklist:
 - ✅ Connect UX: host/IP, auth, SQL Server + Postgres (Settings + Run sidebar; `.vigil/db-profiles.json` + local password vault)
 - ✅ Catalog via agent tools + **visual catalog panel** + `@table` chat chips
-- ✅ Read-only default + gated `sql_run`; agent tools grounded in live schema
+- ✅ **SQL workbench** — editor + results grid + Copy CSV + catalog “Open in SQL” (`SupportSqlPanel` / `runSqlUi`)
+- ✅ Read-only default + gated `sql_run`; **Write mode** UI + `sql_set_mode` confirm
+- ✅ **DB switch** (`sql_use_database`) + **DDL** (`sql_get_object_ddl`) from catalog
+- ✅ Agent tools grounded in live schema
 - 🟨 **Support Tickets** composer (local `.vigil/tickets/` + panel + `draft_support_ticket`; Firestore sync later)
 - 🟨 **Azure DevOps** publish via Work Items REST API — **PAT** path shipped (Entra OAuth later)
-- [ ] Web Support mode entry; secrets never in Firestore
-- [ ] Report binder (Crystal ↔ SQL), broken-report wizard, team report catalog
+- 🟨 Web Support mode entry (`/app/support` CTA → Desktop connect); secrets never in Firestore
+- [ ] Report binder (Crystal ↔ SQL) — **DEFERRED** with Crystal (user 2026-11-13)
 - 🟨 **SQL Activity Capture (“Vigil Profiler”)** — DMV/pg_stat live + Start/Stop window; XEvents + EXE auto-correlate later
-- [ ] Support delight: favorites, history, glossary, playbooks, env diff
+- 🟨 Support delight: favorites + history + glossary shipped; playbooks / env diff later
 - [ ] PM workspace: digests, meeting→actions, ADO snapshot, client updates
-- [ ] Later: Jira/GitHub adapters, write mode, deeper Crystal parse, dialect translation
+- 🟨 Ticket publishers (ADO/GitHub/GitLab/Jira/Linear/ClickUp) shipped; Entra OAuth later
 
 **Depends on:** Desktop connector capability; pairs with Cloud/Web shell (#2).  
 **Suggested order when executing:** after Plan Mode foundation; can parallelize with Cloud Bridge web shell once auth exists.
 
 > **عربي:** قسم — 2c) Desktop EXE Runtime Tester (Windows closed-source apps) — UNFINISHED MVP
 
-### 2c) Desktop EXE Runtime Tester (Windows closed-source apps) — UNFINISHED MVP
+### 2c) Desktop EXE Runtime Tester — **PARKED LAST** (do not implement now)
 **Why:** Same job as Vigil Browser but for installed C# WinForms/DevExpress EXEs + SQL LOB apps — test & discover screens **without source**.  
 **Today:** FlaUI driver + `app_*` tools exist (`tools/vigil-ui-driver`, `sidecar/desktop-app.mjs`) — incomplete vs browser polish.  
 **Full focused spec (complete dream contract):** `.cursor/rules/05-اختبار-برامج-EXE-ويندوز.mdc` — do not implement from memory; that file holds tools, screen map, OCR, replay, Support/Plan/DB glue, remote Windows, etc.
@@ -206,8 +213,8 @@ High-level checklist:
 - ✅ Launch/attach polish + app profiles (`.vigil/app-profiles.json`) + one-click driver install UI
 - ✅ `app_search_ui` + discovery playbook; `app_screenshot` + StatusBar session chip
 - ✅ `app_screen_map` + `app_select` / `app_keys` / windows/focus
-- [ ] OCR fallback; WPF smoke; DevExpress grid/ribbon polish
-- [ ] Record/replay; glue to Support tickets / Plan verify / DB Copilot
+- 🟨 `app_discover_installed` (Program Files / Applications); OCR / WPF / ribbon later
+- [ ] Record/replay; Plan verify / DB Copilot click-capture later
 - [ ] Later: remote Windows worker, دليل الشاشات export
 
 **Runtime discovery answer:** Yes via UI Automation (not IL source). Limits on owner-draw controls.
@@ -220,11 +227,22 @@ High-level checklist:
 **Opinion:** Worth it as **add-on/SKU inside Vigil**, not a random hacker toolkit; never unauthorized third-party hacking.
 
 High-level checklist:
-- [ ] Allowlist / ownership gates (sidecar-enforced)
-- [ ] Passive pack (headers, cookies, deps, secrets) + AR/EN education
-- [ ] Active pack on authorized preview + Browser evidence
-- [ ] Fix → retest loop; Plan Mode security plans
-- [ ] Entitlement + Secure Report export (PDF/ADO)
+- ✅ Allowlist / ownership gates (sidecar-enforced; remote confirm)
+- ✅ Passive pack (headers, cookies, deps, secrets) + AR/EN education + Run/Findings UI
+- ✅ Active pack (`secure_scan_active` + confirm) — paths/XSS/CSRF/admin/verbose
+- ✅ Browser evidence screenshot when Vigil Browser already has the target open
+- ✅ Fix in project → chat queue + Retest; Plan Mode security plans later
+- 🟨 Entitlement stub shipped (`feature.vigilSecure`); **MD + Print/PDF report** on Findings; finding → Support ticket draft
+
+> **عربي:** قسم — 2g) Open with Vigil (Explorer / Finder) — DESKTOP HABIT
+
+### 2g) Open with Vigil (Explorer / Finder)
+**Why:** Cursor-class right-click on a folder. User asked 2026-11-13; higher than EXE/Crystal/Secure PDF.  
+**Spec:** `.cursor/rules/08-فتح-من-مستكشف-النظام.mdc`
+
+- ✅ Windows Explorer **Open with Vigil** (HKCU, no admin) + launch folder args  
+- ✅ macOS **Open With** / Dock drop (`public.folder`)  
+- ✅ Second window/process per folder (sidecar port isolation; skip single-instance when `VIGIL_MULTI_INSTANCE=1`)
 
 > **عربي:** قسم — 3) Real IDE LSP for TypeScript
 
@@ -232,13 +250,13 @@ High-level checklist:
 **Why:** Agent LSP-lite ≠ IDE language service. Heavy refactors need F12 / refs / rename / diagnostics that match `tsconfig`.  
 **Note:** Strengthens desktop Execute quality after Plan / Cloud handoff.
 
-- [ ] Go to Definition (F12) from Monaco using project TS service / language graph bridge
-- [ ] Find All References (Shift+F12) in editor UI (peek or panel)
-- [ ] Rename Symbol (workspace-aware, at least TS/TSX)
-- [ ] Diagnostics: keep Problems panel + agent awareness in sync after edits
-- [ ] Prefer open-tab + import-neighborhood models over blind “load N files”
-- [ ] Optional: wire agent `find_definition` results to “Open at line” consistently
-- [ ] Tests: selection → def path; rename dry-run or fixture project
+- ✅ Go to Definition (F12) — Monaco TS worker + `registerEditorOpener` opens Vigil tabs
+- ✅ Find All References (Shift+F12) / Peek (Alt+F12) via Monaco (same opener)
+- ✅ Rename Symbol (F2) wired to Monaco `editor.action.rename` (models in project cap)
+- ✅ Diagnostics: Problems panel from Monaco markers (URI path normalize)
+- ✅ Prefer open-tab + import-neighborhood models over blind “load N files” (220-file cap remains as RAM budget)
+- ✅ Agent `find_definition` results open at line (chat notes + `path:line` clicks)
+- ✅ Tests: file URI ↔ path for F12 open; `pickTsModelPaths`; `parsePathWithLine`
 
 **Exit criteria:** On a multi-file TS fixture, F12 and refs work without opening chat; rename updates imports; tests green.
 
@@ -247,12 +265,12 @@ High-level checklist:
 ### 4) Monorepo performance & context budgets
 **Why:** Index + chat history must stay usable at 10k–50k files. Helps Plan Mode grounding on huge repos too.
 
-- [ ] Index size budgets (max files/chunks configurable; streaming/jsonl if JSON gets huge)
-- [ ] Search timeouts / early-exit budgets in `search_codebase` / `parallel_investigate`
-- [ ] Compaction settings (recent count / max chars) exposed in agent settings
-- [ ] Avoid full re-embed of entire corpus on tiny upserts (already partial — audit at scale)
-- [ ] Progress UI while first deep index builds on huge repos
-- [ ] Fixture or bench notes for “large repo” smoke (even if synthetic)
+- ✅ Index size budgets (max files/chunks in Settings + sidecar walk cap); jsonl later
+- ✅ Search timeouts / early-exit in `search_codebase` (`VIGIL_SEARCH_TIMEOUT_MS`, default 12s)
+- ✅ Compaction settings (recent count / max chars) in Agent settings
+- ✅ Avoid full re-embed of entire corpus on tiny upserts (already partial)
+- 🟨 Progress UI — StatusBar “Index…” while rebuild; per-file % later
+- ✅ `.gitignore` / `.vigilignore` honored by deep index walk
 
 **Exit criteria:** Opening a large workspace doesn’t freeze UI; search returns within a bounded time; settings persist.
 
@@ -273,10 +291,10 @@ High-level checklist:
 ### 6) Productize PR → CI → Fix
 **Why:** Tools exist; the loop should feel like a first-class workflow (and pair with Plan Mode ops steps).
 
-- [ ] Clear chat/SCM affordance: “Push & watch CI” / failure checklist UI
-- [ ] Auto-suggest next fix step when checks fail (without silent force-push)
-- [ ] Draft PR template from plan + changed files
-- [ ] Tests for CI parse / failure line extraction
+- ✅ Clear chat/SCM affordance: “Push & watch CI” + CI checklist in Source Control
+- ✅ Auto-suggest next fix step when checks fail (`Fix in chat`, no force-push)
+- ✅ Draft PR body from active Plan artifact
+- ✅ Tests for CI parse / failure line extraction (`ops-ci-parse`, `git-pr.test`)
 
 **Exit criteria:** User can run push→checks→fix→recheck without leaving Vigil.
 
@@ -292,14 +310,16 @@ High-level checklist:
 - [ ] Peek definition / peek references UI
 - [ ] Multi-cursor AI edit / multi-hunk Inline Edit
 - [ ] Inline Edit provider routing (not Gemini-only) via model-router / preferred provider
-- [ ] Diff preview before Apply on Inline Edit
+- ✅ Diff preview before Apply on Inline Edit
 - [ ] Command palette entries for reindex / parallel investigate shortcuts
+- ✅ **Multi-repo Source Control with colored tabs** — Phase A+B (`scmReposStore`, tab strip, persist). In-window project switcher **cancelled** (separate Vigil window per workspace) — `.cursor/rules/07-سورس-كنترول-متعدد-المشاريع.mdc`
+- ✅ **Open with Vigil** from Windows Explorer (HKCU) + macOS Open With + second window — `.cursor/rules/08-فتح-من-مستكشف-النظام.mdc`
 
 > **عربي:** قسم — Agent autonomy
 
 ### Agent autonomy
 - [ ] Configurable max delegates / concurrency in settings
-- [ ] Cancel in-flight delegates from UI
+- ✅ Cancel in-flight delegates from UI
 - [ ] Worktree cleanup tool / SCM integration after merge
 - [ ] Stronger test-gate policies per project scripts
 - [ ] True multi-turn agent session continuity (resume sidecar/Cline session, not only compacted prompt history)
@@ -384,6 +404,21 @@ Example:
 - 2026-11-12: **ADO PAT + Vigil Profiler DMV** — Integrations publish; `sql_activity_*` capture.
 - 2026-11-12: **Firestore continuum Wave A** — auth-restore hydrate, uid+userId+ms, smarter merge, web iso(ms), push on close, embed auto-open; EXE deferred.
 - 2026-11-12: **Support catalog UI** — SupportCatalogPanel + `@table` composer chips.
+- 2026-11-13: **Multi-repo SCM colored tabs** — Cursor stacks repos and titles get lost; Vigil spec `07-سورس-كنترول-متعدد-المشاريع.mdc` (tabs + color identity; SCM-only Phase A).
+- 2026-11-13: Firestore-primary hydrate + `vigil://chat` deep link; **Vigil Secure Phase A** (allowlist gate + passive scan + AR/EN findings UI).
+- 2026-11-13: User priority lock — **#1 continuum**, **#2 chat web↔desktop sync**, **#3 DB live connect**; **EXE + Crystal deferred**. Continuum Wave B: plan step cloud push during Execute + periodic chat hydrate + rename→cloud + web PlanLiveStatus steps.
+- 2026-11-13: Support **SQL workbench** — `SupportSqlPanel`, `runSqlUi`, catalog Open in SQL, CSV export; wired in Run sidebar + Settings.
+- 2026-11-13: Support DB — `sql_use_database`, `sql_set_mode`, `sql_get_object_ddl` + Catalog Use/DDL + Write confirm UI.
+- 2026-11-13: Support DB polish — procs/functions catalog, schema groups, `sql_explain`, query history/stars, profile favorite+lastDatabase, pin to chat, StatusBar WRITE.
+- 2026-11-13: **Multi-repo SCM Phase A+B shipped** — colored tabs, persist, drafts, StatusBar chip; git ops scoped to active tab cwd.
+- 2026-11-13: **In-window project switcher cancelled** — each workspace = its own Vigil window; no warm combo.
+- 2026-11-13: **Open with Vigil** (Explorer / Finder) — spec `08`; Windows HKCU menu + launch path; Mac Open With `public.folder`.
+- 2026-11-13: **Kashier Live path** + wallet entitlements/subscriptions on grantPlan; Secure Findings **PDF/MD** export. EXE+Crystal parked last.
+- 2026-11-13: User: park remaining SQL + EXE + Crystal as **last stage**; execute Cloud Bridge + TS LSP now. Vercel bulk env script. Monaco F12 opener + Cloud status chip.
+- 2026-11-14: TS LSP neighborhood models (`import_neighbor_paths`) + `find_definition` open-at-line; embed `vigil:plan-updated`; web Library kinds + Schedule planId CTA. Vercel Live keys still ops (not pushed from this session).
+- 2026-11-14: Desktop Cloud History → embed SoR; Open-with **second process** + sidecar port isolation; Tickets publish for GitHub/GitLab/Jira/Linear/ClickUp (+ GitHub sign-in). Kashier Live keys still empty (ops).
+- 2026-11-14: Web shell close-out — starred/archived/help + mobile drawer + EN locale; `app_discover_installed`; SQL glossary; Secure finding → ticket draft.
+- 2026-11-15: Product waves — Kashier Live still ops; SCM Push & watch CI + Fix in chat; index budgets + gitignore; Inline Edit diff preview; cancel delegates; Secure screenshot + Fix in project.
 
 ---
 
@@ -404,15 +439,19 @@ Example:
 ## Current focus pointer
 
 **Phase:** EXECUTING  
-**Active implementation:** Web↔Desktop Firestore continuum (same history) — Wave A; EXE **deferred**  
-**Last tests:** cloud-hydrate + chat-cloud + continuum (2026-11-12)
+**Active implementation (2026-11-15):** CI loop + index budgets + inline-edit preview + delegate cancel + Secure evidence **shipped**; Kashier Live keys still **ops**  
+**Next suggested:** Kashier Live keys when MID is issued. Embeddings / MCP / ZAP still parked.  
+**Deferred — parked last remainder:** SQL XEvents/EXE OCR-replay · Crystal · Secure ZAP  
+**Last tests:** ops-ci-parse + git-pr + index-ignore (2026-11-15)
 **Active focus docs:**  
 - `1) Plan Mode` → `.cursor/rules/01-وضع-التخطيط-Plan-Mode.mdc` ← **✅ CLOSED**  
-- `2) Unified Cloud Bridge` → `.cursor/rules/02-جسر-السحابة-الموحد.mdc` ← **now (continuum)**  
+- `2) Unified Cloud Bridge` → `.cursor/rules/02-جسر-السحابة-الموحد.mdc` ← desktop history SoR ✅; web shell still `03`  
 - `2b) Vigil Web` → `.cursor/rules/03-عقد-مشروع-الويب.mdc`  
-- `2c) Support / DB` → `.cursor/rules/04-دعم-فني-وقواعد-البيانات.mdc`  
-- `2d) Desktop EXE` → `.cursor/rules/05-اختبار-برامج-EXE-ويندوز.mdc` ← **DEFERRED (lowest priority)**  
-- `2e) Vigil Secure` → `.cursor/rules/06-الأمان-الدفاعي-للويب.mdc`  
+- `2c) Support / DB` → `.cursor/rules/04-دعم-فني-وقواعد-البيانات.mdc` ← **PARKED LAST** (with EXE/Crystal)  
+- `2d) Desktop EXE` → `.cursor/rules/05-اختبار-برامج-EXE-ويندوز.mdc` ← **DEFERRED**  
+- `2e) Vigil Secure` → `.cursor/rules/06-الأمان-الدفاعي-للويب.mdc` ← **Phase A+B ✅** · PDF/MD ✅  
+- `2f) Multi-repo SCM` → `.cursor/rules/07-سورس-كنترول-متعدد-المشاريع.mdc` ← **Phase A+B ✅** (in-window switcher cancelled)  
+- `2g) Open with Vigil` → `.cursor/rules/08-فتح-من-مستكشف-النظام.mdc` ← **Windows+Mac + second window**  
 **Checkbox habit:** `[ ]` مش خلص · `🟨` جزئي · `✅` خلص (أخضر واضح)
 
 > **عربي:** `✅` = خلص ونجح · `🟨` = اتعمل جزء · `[ ]` = لسه.

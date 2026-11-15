@@ -48,5 +48,10 @@ describe("agentSettingsStore", () => {
     useAgentSettingsStore.getState().setAutoSuggestPlanMode(false);
     expect(memory.get("vigil.agent.autoSuggestPlanMode")).toBe("0");
     expect(useAgentSettingsStore.getState().autoSuggestPlanMode).toBe(false);
+
+    useAgentSettingsStore.getState().setIndexMaxFiles(8000);
+    expect(memory.get("vigil.agent.indexMaxFiles")).toBe("8000");
+    useAgentSettingsStore.getState().setCompactRecentCount(4);
+    expect(memory.get("vigil.agent.compactRecent")).toBe("4");
   });
 });

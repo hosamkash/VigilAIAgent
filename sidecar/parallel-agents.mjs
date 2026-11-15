@@ -35,7 +35,7 @@ export async function mapPool(items, concurrency, fn) {
  *   prompt: string,
  *   branch?: string,
  *   workdir?: string,
- *   status: "pending" | "running" | "completed" | "failed",
+ *   status: "pending" | "running" | "completed" | "failed" | "cancelled",
  *   result?: string,
  *   error?: string,
  * }} DelegateJob
@@ -80,6 +80,9 @@ export function formatDelegateSummary(jobs) {
       const head = `${i + 1}. [${job.status}] ${job.title}`;
       if (job.status === "failed") {
         return `${head}\n   error: ${job.error || "failed"}`;
+      }
+      if (job.status === "cancelled") {
+        return `${head}\n   cancelled`;
       }
       if (job.result) {
         const preview = job.result.replace(/\s+/g, " ").slice(0, 280);

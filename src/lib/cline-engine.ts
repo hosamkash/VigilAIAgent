@@ -7,7 +7,6 @@
  * Flow: getApiKey (Rust) → spawn_sidecar → HMAC fetch → NDJSON stream.
  */
 
-import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import {
   getApiKey,
@@ -16,6 +15,7 @@ import {
   getWorkspaceCwd,
   spawnSidecar,
 } from "./secure-storage";
+import { sidecarBaseUrl } from "./sidecar-endpoint";
 import {
   routeTask,
   type LlmProviderId,
@@ -24,9 +24,12 @@ import {
 
 export type { LlmProviderId, RoutedModel };
 
-const SIDECAR_BASE = "http://127.0.0.1:47821";
-const SIDECAR_RUN_TASK = `${SIDECAR_BASE}/run_task`;
-const SIDECAR_PING = `${SIDECAR_BASE}/ping`;
+function sidecarRunTaskUrl(): string {
+  return `${sidecarBaseUrl()}/run_task`;
+}
+function sidecarPingUrl(): string {
+  return `${sidecarBaseUrl()}/ping`;
+}
 
 /** Mirrors SDK DefaultToolNames for Phase 0 tests (no browser SDK import). */
 export const DefaultToolNames = {
@@ -117,6 +120,11 @@ export type VigilStreamEvent =
       }>;
       /** Support Ticket Composer (`draft_support_ticket`). */
       supportTicket?: Record<string, unknown>;
+      /** Vigil Secure passive scan result. */
+      secureScan?: Record<string, unknown>;
+      secureAllowlist?: Record<string, unknown>;
+      /** Agent find_definition hits (open at line). */
+      locations?: Array<{ path: string; line?: number; title?: string }>;
     }
   | {
       type: "tool_approval";
@@ -281,7 +289,7 @@ export async function* runVigilTask(
   const hmac = await signSidecarBody(secret, session.sessionId, body);
 
   const res = await withAbort(
-    sidecarFetch(SIDECAR_RUN_TASK, {
+    sidecarFetch(sidecarRunTaskUrl(), {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -373,7 +381,7 @@ export async function listWorkspaceFiles(dirPath = "."): Promise<string> {
   const cwd = await getWorkspaceCwd().catch(() => undefined);
   const body = JSON.stringify({ op: "list_files", path: dirPath, cwd });
   const hmac = await signSidecarBody(secret, session.sessionId, body);
-  const res = await sidecarFetch(SIDECAR_BASE, {
+  const res = await sidecarFetch(sidecarBaseUrl(), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -408,7 +416,7 @@ export async function respondToolApproval(
     approved: decision === "allow" || decision === "allow_session",
   });
   const hmac = await signSidecarBody(secret, session.sessionId, body);
-  const res = await sidecarFetch(SIDECAR_BASE, {
+  const res = await sidecarFetch(sidecarBaseUrl(), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -435,7 +443,7 @@ export async function pingSidecar(): Promise<{
   const session = await getLaunchSession();
   const body = JSON.stringify({ op: "ping" });
   const hmac = await signSidecarBody(secret, session.sessionId, body);
-  const res = await sidecarFetch(SIDECAR_PING, {
+  const res = await sidecarFetch(sidecarPingUrl(), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -450,7 +458,7 @@ export async function pingSidecar(): Promise<{
 }
 
 export async function ensureSidecar(): Promise<void> {
-  await invoke("spawn_sidecar");
+  await spawnSidecar();
 }
 
 export type CodeIndexSummary = {
@@ -471,6 +479,7 @@ export type CodeIndexSummary = {
 async function postSidecarOp(
   op: string,
   extra: Record<string, unknown> = {},
+  timeoutMs = 60_000,
 ): Promise<Record<string, unknown>> {
   await spawnSidecar();
   const secret = await getLaunchSecret();
@@ -478,19 +487,26 @@ async function postSidecarOp(
   const cwd = await getWorkspaceCwd().catch(() => undefined);
   const body = JSON.stringify({ op, cwd, ...extra });
   const hmac = await signSidecarBody(secret, session.sessionId, body);
-  const res = await sidecarFetch(SIDECAR_BASE, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-vigil-hmac": hmac,
-      "x-vigil-session": session.sessionId,
-    },
-    body,
-  });
-  if (!res.ok) {
-    throw new Error(`${op} failed: ${res.status}`);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await sidecarFetch(sidecarBaseUrl(), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vigil-hmac": hmac,
+        "x-vigil-session": session.sessionId,
+      },
+      body,
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`${op} failed: ${res.status}`);
+    }
+    return (await res.json()) as Record<string, unknown>;
+  } finally {
+    clearTimeout(timer);
   }
-  return (await res.json()) as Record<string, unknown>;
 }
 
 /** Ensure / warm the local BM25 code index in the sidecar. */
@@ -512,8 +528,13 @@ function toCodeIndexSummary(result: Record<string, unknown>): CodeIndexSummary {
 
 export async function ensureLocalCodeIndex(
   force = false,
+  budgets?: { maxFiles?: number; maxChunks?: number },
 ): Promise<CodeIndexSummary> {
-  const result = await postSidecarOp("ensure_code_index", { force });
+  const result = await postSidecarOp("ensure_code_index", {
+    force,
+    maxFiles: budgets?.maxFiles,
+    maxChunks: budgets?.maxChunks,
+  });
   return toCodeIndexSummary(result);
 }
 
@@ -528,6 +549,10 @@ export async function getLocalCodeIndexStatus(): Promise<CodeIndexSummary> {
 }
 
 /** Incremental update after an editor save. */
+export async function cancelInFlightDelegates(): Promise<void> {
+  await postSidecarOp("cancel_delegates", {}, 8_000);
+}
+
 export async function updateLocalCodeIndexFile(
   relativePath: string,
   content: string | null,
@@ -537,4 +562,75 @@ export async function updateLocalCodeIndexFile(
     content,
     delete: content === null,
   });
+}
+
+/** 1-hop import-graph neighbors for Monaco extra TS models. */
+export type VercelWebEnvStatus = {
+  ok: boolean;
+  foundRepo?: boolean;
+  webRoot?: string;
+  envLocalExists?: boolean;
+  pushed?: boolean;
+  pushedAt?: number | null;
+  keyCount?: number;
+  keys?: string[];
+  hadServiceAccountJson?: boolean;
+  hasServiceAccountPath?: boolean;
+  kashierMode?: string | null;
+  hasKashierLive?: boolean;
+  warning?: string | null;
+  error?: string | null;
+  log?: string;
+};
+
+function toVercelWebEnvStatus(
+  result: Record<string, unknown>,
+): VercelWebEnvStatus {
+  return {
+    ok: result.ok !== false,
+    foundRepo: result.foundRepo === true,
+    webRoot: typeof result.webRoot === "string" ? result.webRoot : undefined,
+    envLocalExists: result.envLocalExists === true,
+    pushed: result.pushed === true,
+    pushedAt:
+      typeof result.pushedAt === "number" ? result.pushedAt : null,
+    keyCount: Number(result.keyCount || 0),
+    keys: Array.isArray(result.keys)
+      ? result.keys.filter((k): k is string => typeof k === "string")
+      : [],
+    hadServiceAccountJson: result.hadServiceAccountJson === true,
+    hasServiceAccountPath: result.hasServiceAccountPath === true,
+    kashierMode:
+      typeof result.kashierMode === "string" ? result.kashierMode : null,
+    hasKashierLive: result.hasKashierLive === true,
+    warning: typeof result.warning === "string" ? result.warning : null,
+    error: typeof result.error === "string" ? result.error : null,
+    log: typeof result.log === "string" ? result.log : undefined,
+  };
+}
+
+export async function fetchVercelWebEnvStatus(): Promise<VercelWebEnvStatus> {
+  const result = await postSidecarOp("vercel_web_env", { action: "status" }, 20_000);
+  return toVercelWebEnvStatus(result);
+}
+
+export async function runVercelWebEnvPush(): Promise<VercelWebEnvStatus> {
+  const result = await postSidecarOp("vercel_web_env", { action: "push" }, 15 * 60_000);
+  return toVercelWebEnvStatus(result);
+}
+
+export async function fetchImportNeighborPaths(
+  seedPaths: string[],
+): Promise<string[]> {
+  if (!seedPaths.length) return [];
+  try {
+    const result = await postSidecarOp("import_neighbor_paths", {
+      paths: seedPaths,
+    });
+    const paths = result.paths;
+    if (!Array.isArray(paths)) return [];
+    return paths.filter((p): p is string => typeof p === "string" && p.length > 0);
+  } catch {
+    return [];
+  }
 }

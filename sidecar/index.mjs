@@ -26,6 +26,8 @@ import {
   upsertIndexedFile,
   getCodeIndexStatus,
 } from "./tools.mjs";
+import { importNeighbors } from "./code-index.mjs";
+import { vercelWebEnvOp } from "./vercel-web-env.mjs";
 import { createCheckpointWriter, installWriteCapture } from "./checkpoints.mjs";
 import { AgentTextStream } from "./agent-stream.mjs";
 import {
@@ -272,7 +274,7 @@ async function startWithModel(
     "NEVER use terminal open/xdg-open. Prefer browser_open over browser_navigate for viewing. " +
     "If you need click/type automation on a website, browser_navigate runs headless (invisible) and still " +
     "updates Vigil Browser via browser_open. Never tell the user to use Command Palette. " +
-    "For Windows WinForms/DevExpress desktop apps: use app_launch (path, 'project', or profile) → " +
+    "For Windows WinForms/DevExpress desktop apps: use app_discover_installed to find an EXE, then app_launch (path, 'project', or profile) → " +
     "prefer app_search_ui for «فين الشاشة؟» / «فيها خاصية X؟» before random clicks; " +
     "if miss → app_screen_map (bounded menu crawl) then confirm with app_screenshot when ambiguous → " +
     "app_snapshot → app_click / app_select / app_type / app_keys / app_read / app_wait. " +
@@ -282,14 +284,22 @@ async function startWithModel(
     "If the UI driver is missing, tell the user to click «تثبيت محرك الاختبار» in the Run sidebar " +
     "(or Settings → Desktop apps) — do NOT ask them to run dotnet publish in a terminal. " +
     "For live SQL Server / PostgreSQL (Support / DB Copilot): prefer sql_profiles_list → sql_connect " +
-    "(password from user/UI; never invent credentials) → sql_list_databases / sql_list_objects / " +
-    "sql_describe_table before guessing table names → sql_run for SELECT only while read-only. " +
+    "(password from user/UI; never invent credentials) → sql_list_databases / sql_use_database / " +
+    "sql_list_objects / sql_describe_table / sql_get_object_ddl / sql_glossary_search before guessing → sql_run for SELECT " +
+    "while read-only. Use sql_set_mode with confirm:true only when the user explicitly wants writes. " +
+    "For slow queries: sql_explain (estimated; ANALYZE only with confirmAnalyze). " +
     "Never claim schema without catalog evidence. " +
     "For «إيه الجملة اللي اتنفذت؟» / Profiler without SSMS: sql_capture_start → user opens report/clicks → " +
     "sql_capture_stop (or sql_activity_live for a one-shot). Filter by login/host/app when known. " +
     "When the user asks for a developer handoff / تيكت / bug ticket: use draft_support_ticket with " +
     "structured fields (title, type, summary, repro steps, expected/actual, evidence, acceptance). " +
     "Never put passwords or full production row dumps in tickets. " +
+    "For Vigil Secure (defensive only, authorized targets): secure_allowlist_list / secure_allowlist_add " +
+    "(remote hosts need confirm:true after user ownership confirmation) → secure_scan_passive on " +
+    "localhost, project preview, or allowlisted host. Active pack: secure_scan_active with confirm:true " +
+    "(safe probes only — sensitive paths, listing, reflected probe, CSRF forms, admin reachability). " +
+    "Hard-fail unauthorized URLs — never scan arbitrary third-party sites. Prefer remediation patches; " +
+    "use secure_explain for beginner AR/EN education. Never provide weaponized exploit steps. " +
     "Always reply in the same language as the user's latest message " +
     "(Arabic→Arabic, English→English, and the same for every other language). " +
     "Do not switch languages unless the user asks. Keep code and paths unchanged." +
@@ -717,9 +727,22 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (payload.op === "cancel_delegates") {
+      const { cancelDelegates } = await import("./delegate-runtime.mjs");
+      const out = JSON.stringify(cancelDelegates());
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
     if (payload.op === "ensure_code_index") {
       await ensureCodeIndex(requestCwd, {
         force: !!payload.force,
+        maxFiles: payload.maxFiles,
+        maxChunks: payload.maxChunks,
       });
       const status = await getCodeIndexStatus(requestCwd);
       const out = JSON.stringify(status);
@@ -754,6 +777,111 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (payload.op === "secure") {
+      const {
+        addAllowlistHost,
+        loadAllowlist,
+        removeAllowlistHost,
+        listAllowHosts,
+      } = await import("./secure-allowlist.mjs");
+      const { runPassiveScan } = await import("./secure-passive.mjs");
+      const { runActiveScan } = await import("./secure-active.mjs");
+      const { explainFinding } = await import("./secure-education.mjs");
+      const { detectProjectUrl } = await import("./browser.mjs");
+      const action = String(payload.action || "").trim();
+      const input =
+        payload.input && typeof payload.input === "object" ? payload.input : {};
+      let result;
+      if (action === "allowlist_list") {
+        const data = await loadAllowlist(requestCwd);
+        result = { ok: true, ...data };
+      } else if (action === "allowlist_add") {
+        try {
+          const saved = await addAllowlistHost(requestCwd, input);
+          result = { ok: true, ...saved };
+        } catch (e) {
+          result = { ok: false, error: String(e?.message || e) };
+        }
+      } else if (action === "allowlist_remove") {
+        const saved = await removeAllowlistHost(requestCwd, input.host);
+        result = { ok: true, ...saved };
+      } else if (action === "scan_passive") {
+        let url = String(input.url || "").trim();
+        let previewUrl = null;
+        try {
+          previewUrl = await detectProjectUrl(requestCwd);
+        } catch {
+          previewUrl = null;
+        }
+        if (!url) url = previewUrl || "http://127.0.0.1:5173";
+        const allowHosts = await listAllowHosts(requestCwd);
+        result = await runPassiveScan({
+          url,
+          workspaceRoot: requestCwd,
+          allowHosts,
+          previewUrl,
+        });
+        try {
+          const { tryScreenshotOpenPage } = await import("./browser.mjs");
+          const shot = await tryScreenshotOpenPage();
+          if (shot) {
+            result.screenshotBase64 = shot.imageBase64;
+            result.screenshotUrl = shot.url;
+          }
+        } catch {
+          /* evidence optional */
+        }
+      } else if (action === "scan_active") {
+        let url = String(input.url || "").trim();
+        let previewUrl = null;
+        try {
+          previewUrl = await detectProjectUrl(requestCwd);
+        } catch {
+          previewUrl = null;
+        }
+        if (!url) url = previewUrl || "http://127.0.0.1:5173";
+        const allowHosts = await listAllowHosts(requestCwd);
+        result = await runActiveScan({
+          url,
+          allowHosts,
+          previewUrl,
+          confirm: input.confirm === true,
+        });
+        try {
+          const { tryScreenshotOpenPage } = await import("./browser.mjs");
+          const shot = await tryScreenshotOpenPage();
+          if (shot) {
+            result.screenshotBase64 = shot.imageBase64;
+            result.screenshotUrl = shot.url;
+          }
+        } catch {
+          /* evidence optional */
+        }
+      } else if (action === "explain") {
+        const lang = String(input.lang || "en").startsWith("ar") ? "ar" : "en";
+        result = {
+          ok: true,
+          ...explainFinding(String(input.category || ""), lang),
+        };
+      } else if (action === "preview_url") {
+        try {
+          const previewUrl = await detectProjectUrl(requestCwd);
+          result = { ok: true, previewUrl };
+        } catch (e) {
+          result = { ok: false, error: String(e?.message || e) };
+        }
+      } else {
+        result = { ok: false, error: `Unknown secure action: ${action}` };
+      }
+      const out = JSON.stringify(result);
+      res.writeHead(result.ok === false ? 400 : 200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
     if (payload.op === "sql") {
       const {
         sql_connect,
@@ -763,6 +891,11 @@ const server = createServer(async (req, res) => {
         sql_list_objects,
         sql_describe_table,
         sql_run,
+        sql_use_database,
+        sql_set_mode,
+        sql_get_object_ddl,
+        sql_explain,
+        patchDbProfile,
         sql_activity_live,
         sql_capture_start,
         sql_capture_stop,
@@ -795,6 +928,16 @@ const server = createServer(async (req, res) => {
         result = await sql_describe_table(input);
       } else if (action === "run") {
         result = await sql_run(input);
+      } else if (action === "use_database") {
+        result = await sql_use_database(input);
+      } else if (action === "set_mode") {
+        result = await sql_set_mode(input);
+      } else if (action === "get_object_ddl") {
+        result = await sql_get_object_ddl(input);
+      } else if (action === "explain") {
+        result = await sql_explain(input);
+      } else if (action === "profiles_patch") {
+        result = await patchDbProfile(requestCwd, input.profileId || input.id, input);
       } else if (action === "activity_live") {
         result = await sql_activity_live(input);
       } else if (action === "capture_start") {
@@ -810,6 +953,33 @@ const server = createServer(async (req, res) => {
       }
       const out = JSON.stringify(result);
       res.writeHead(result.ok === false ? 400 : 200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
+    if (payload.op === "vercel_web_env") {
+      const action = payload.action === "push" ? "push" : "status";
+      const result = await vercelWebEnvOp(action, requestCwd, projectRoot);
+      const out = JSON.stringify(result);
+      res.writeHead(result.ok === false && !result.foundRepo ? 400 : 200, {
+        "content-type": "application/json",
+        "x-vigil-hmac": sign(out),
+      });
+      res.end(out);
+      return;
+    }
+
+    if (payload.op === "import_neighbor_paths") {
+      const index = await ensureCodeIndex(requestCwd);
+      const seeds = Array.isArray(payload.paths)
+        ? payload.paths.map((p) => String(p || "").trim()).filter(Boolean)
+        : [];
+      const neighbors = [...importNeighbors(index, seeds)];
+      const out = JSON.stringify({ ok: true, paths: neighbors });
+      res.writeHead(200, {
         "content-type": "application/json",
         "x-vigil-hmac": sign(out),
       });

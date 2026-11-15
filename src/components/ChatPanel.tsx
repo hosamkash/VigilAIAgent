@@ -112,10 +112,14 @@ import { useDesktopAppStore } from "../store/desktopAppStore";
 import { useSqlSessionStore } from "../store/sqlSessionStore";
 import { useSqlCatalogStore } from "../store/sqlCatalogStore";
 import { useSupportTicketStore } from "../store/supportTicketStore";
+import { useSecureStore } from "../store/secureStore";
+import type { SecureScanResult } from "../lib/secure-sidecar";
+import { useCloudAuthStore } from "../store/cloudAuthStore";
 import { useExplorerDragStore } from "../lib/explorer-drag-session";
 import { openAndRevealFile } from "../lib/open-workspace-file";
 import { PaneToggleButton } from "./layout/PaneToggleButton";
 import { SupportTicketPanel } from "./SupportTicketPanel";
+import { SecureFindingsPanel } from "./SecureFindingsPanel";
 
 function isAbortError(err: unknown): boolean {
   return (
@@ -451,12 +455,68 @@ function ModelSelect() {
   return (
     <select
       aria-label="Model"
-      className="h-7 max-w-[8.75rem] shrink-0 truncate rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-1.5 text-[11px] normal-case tracking-normal !text-[var(--vigil-text)]"
+      title="Model"
+      className="h-6 w-[92px] shrink-0 truncate rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-1 text-[9px] leading-tight normal-case tracking-normal !text-[var(--vigil-text)]"
       value={selected}
       onChange={(event) => setPreferredProvider(event.target.value)}
     >
       {CHAT_MODEL_OPTIONS.map((item) => (
         <option key={item.id} value={item.id}>
+          {item.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+const CHAT_MODE_OPTIONS = [
+  { id: "agent" as const, label: "Agent", title: "Build and edit code" },
+  {
+    id: "ask" as const,
+    label: "Ask",
+    title: "Questions and discussion — no edits",
+  },
+  {
+    id: "plan" as const,
+    label: "Plan",
+    title: "Investigate and draft a plan — writes blocked until Execute",
+  },
+];
+
+function ChatModeSelect({
+  chatMode,
+  setChatMode,
+  isRunning,
+}: {
+  chatMode: "agent" | "ask" | "plan";
+  setChatMode: (mode: "agent" | "ask" | "plan") => void;
+  isRunning: boolean;
+}) {
+  const active = CHAT_MODE_OPTIONS.find((item) => item.id === chatMode);
+  return (
+    <select
+      aria-label="Chat mode"
+      title={active?.title ?? "Chat mode"}
+      className="h-6 w-[56px] shrink-0 truncate rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-1 text-[9px] leading-tight normal-case tracking-normal !text-[var(--vigil-text)]"
+      value={chatMode}
+      onChange={(event) => {
+        const mode = event.target.value as "agent" | "ask" | "plan";
+        if (mode === chatMode) return;
+        if (isRunning) {
+          const ok = window.confirm(
+            "في دور شغال دلوقتي. تغيير الوضع ممكن يوقف السياق الحالي.\n\n" +
+              "A turn is running. Switch modes anyway?",
+          );
+          if (!ok) {
+            event.target.value = chatMode;
+            return;
+          }
+        }
+        setChatMode(mode);
+      }}
+    >
+      {CHAT_MODE_OPTIONS.map((item) => (
+        <option key={item.id} value={item.id} title={item.title}>
           {item.label}
         </option>
       ))}
@@ -1053,9 +1113,15 @@ export function ChatPanel() {
     }
   }
 
+  const cloudConfigured = useCloudAuthStore((s) => s.configured);
+  const cloudReady = useCloudAuthStore((s) => s.ready);
+  const cloudUser = useCloudAuthStore((s) => s.user);
+
   useEffect(() => {
+    // Wait for Firebase auth restore so signed-in hydrate pulls Firestore first.
+    if (cloudConfigured && !cloudReady) return;
     void hydrate().then(() => backfillChatTabTitles());
-  }, [hydrate]);
+  }, [hydrate, cloudConfigured, cloudReady]);
 
   useEffect(() => {
     if (!activeTabId && tabs[0]) setActive(tabs[0].id);
@@ -1520,9 +1586,10 @@ export function ChatPanel() {
       promptForAgent = attachReferencedChats(promptForAgent, tabId, findChatByRequestId);
 
       // Continuity for long monorepo sessions: compact older turns, keep recent verbatim.
+      const compact = useAgentSettingsStore.getState();
       const historyBlock = buildCompactChatHistory(messagesOf(tabId), {
-        recentCount: 6,
-        maxChars: 14_000,
+        recentCount: compact.compactRecentCount ?? 6,
+        maxChars: compact.compactMaxChars ?? 14_000,
         skipLastUser: true,
       });
       if (historyBlock) {
@@ -1597,6 +1664,23 @@ export function ChatPanel() {
           if (encoded) takeText(encoded);
         } else if (
           event.type === "tool" &&
+          event.toolName === "find_definition" &&
+          Array.isArray(event.locations) &&
+          event.locations.length
+        ) {
+          const lines = event.locations
+            .slice(0, 12)
+            .map((loc) => {
+              const line = typeof loc.line === "number" && loc.line > 0 ? loc.line : 1;
+              const title = loc.title ? `${loc.title} · ` : "";
+              return `- ${title}\`${loc.path}:${line}\``;
+            })
+            .join("\n");
+          const note = `Definitions (open at line):\n${lines}`;
+          notes = notes ? `${notes}\n\n${note}` : note;
+          publish(null);
+        } else if (
+          event.type === "tool" &&
           (event.toolName === "get_ci_status" ||
             event.toolName === "push_and_check_ci") &&
           event.chunk
@@ -1663,7 +1747,9 @@ export function ChatPanel() {
                     ? "failed"
                     : statusRaw === "completed"
                       ? "completed"
-                      : "pending";
+                      : statusRaw === "cancelled" || statusRaw === "canceled"
+                        ? "cancelled"
+                        : "pending";
               const detail = job.error
                 ? ` — ${job.error}`
                 : job.result
@@ -1842,6 +1928,31 @@ export function ChatPanel() {
               event.supportTicket as Record<string, unknown>,
             );
           publish(null);
+        } else if (
+          event.type === "tool" &&
+          (event.toolName === "secure_scan_passive" ||
+            event.toolName === "secure_scan_active") &&
+          event.secureScan &&
+          typeof event.secureScan === "object"
+        ) {
+          const scan = event.secureScan as SecureScanResult;
+          useSecureStore.setState({
+            lastScan: {
+              ok: scan.ok !== false,
+              error: scan.error,
+              pack: scan.pack,
+              target: scan.target,
+              scannedAt: scan.scannedAt,
+              findings: Array.isArray(scan.findings) ? scan.findings : [],
+              summary: scan.summary,
+            },
+            selectedFinding: Array.isArray(scan.findings)
+              ? scan.findings[0] || null
+              : null,
+            panelOpen: true,
+            error: scan.ok === false ? scan.error || "Scan blocked" : null,
+          });
+          publish(null);
         } else if (event.type === "done") {
           stream.adoptFinal(event.text);
           if (!browserOpenedThisTurn) {
@@ -1971,7 +2082,7 @@ export function ChatPanel() {
   }
 
   async function enqueuePlanTurn(prompt: string, userVisible: string) {
-    if (!activeTab || isRunning) return;
+    if (!activeTab) return;
     setChatMode("agent");
     const turn: QueuedTurn = {
       id: crypto.randomUUID(),
@@ -1996,6 +2107,21 @@ export function ChatPanel() {
 
   const executeActivePlanRef = useRef(executeActivePlan);
   executeActivePlanRef.current = executeActivePlan;
+
+  const queuedAgentPrompt = useChatStore((s) => s.queuedAgentPrompt);
+  const enqueuePlanTurnRef = useRef(enqueuePlanTurn);
+  enqueuePlanTurnRef.current = enqueuePlanTurn;
+  useEffect(() => {
+    if (!queuedAgentPrompt) return;
+    useChatStore.getState().clearQueuedAgentPrompt();
+    if (!useLayoutStore.getState().chatVisible) {
+      useLayoutStore.getState().toggleChat();
+    }
+    void enqueuePlanTurnRef.current(
+      queuedAgentPrompt,
+      queuedAgentPrompt.slice(0, 120),
+    );
+  }, [queuedAgentPrompt]);
 
   useEffect(() => {
     async function onCloudExecute(ev: Event) {
@@ -2451,6 +2577,31 @@ export function ChatPanel() {
         <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
 
+      {cloudUser ? (
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--vigil-border)] px-3 py-1.5 text-[11px] text-[var(--vigil-muted)]">
+          <span>
+            هستوري الحساب على Firestore — افتح Vigil Cloud لنفس الشاتس/الخطط.
+          </span>
+          <button
+            type="button"
+            className="shrink-0 rounded border border-[var(--vigil-border)] px-2 py-0.5 text-[10px] text-[var(--vigil-accent)] hover:bg-[var(--vigil-hover)]"
+            onClick={() => {
+              const id = activeTabId;
+              void import("../lib/cloud/open-cloud-embed").then(
+                ({ openCloudEmbedTab }) => {
+                  openCloudEmbedTab({
+                    focus: true,
+                    nextPath: id ? `/app/chats/${id}` : "/app",
+                  });
+                },
+              );
+            }}
+          >
+            Open Cloud
+          </button>
+        </div>
+      ) : null}
+
       <ChatTabBar
         tabs={tabs}
         history={history}
@@ -2486,6 +2637,7 @@ export function ChatPanel() {
           />
         ) : null}
         <SupportTicketPanel />
+        <SecureFindingsPanel />
         <div className="space-y-3">
           {messages.length === 0 && (
             <div className="rounded border border-dashed border-[var(--vigil-border)] p-3 text-xs text-[var(--vigil-muted)]">
@@ -2557,7 +2709,7 @@ export function ChatPanel() {
       <form
         data-chat-composer
         onSubmit={(e) => void onSubmit(e)}
-        className={`relative border-t border-[var(--vigil-border)] p-3 transition-colors ${
+        className={`relative border-t border-[var(--vigil-border)] px-2.5 py-1.5 transition-colors ${
           composerHighlight
             ? "bg-[var(--vigil-accent-soft)] ring-2 ring-inset ring-[var(--vigil-accent)]"
             : ""
@@ -2567,59 +2719,6 @@ export function ChatPanel() {
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
       >
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <div
-            className="inline-flex rounded border border-[var(--vigil-border)] p-0.5 text-[11px]"
-            role="group"
-            aria-label="Chat mode"
-          >
-            {(
-              [
-                ["agent", "Agent", "Build and edit code"],
-                ["ask", "Ask", "Questions and discussion — no edits"],
-                [
-                  "plan",
-                  "Plan",
-                  "Investigate and draft a plan — writes blocked until Execute",
-                ],
-              ] as const
-            ).map(([mode, label, title]) => (
-              <button
-                key={mode}
-                type="button"
-                title={title}
-                className={`rounded px-2 py-0.5 ${
-                  chatMode === mode
-                    ? "bg-[var(--vigil-accent)] !text-white"
-                    : "text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
-                }`}
-                onClick={() => {
-                  if (mode === chatMode) return;
-                  if (isRunning) {
-                    const ok = window.confirm(
-                      "في دور شغال دلوقتي. تغيير الوضع ممكن يوقف السياق الحالي.\n\n" +
-                        "A turn is running. Switch modes anyway?",
-                    );
-                    if (!ok) return;
-                  }
-                  setChatMode(mode);
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {chatMode === "plan" ? (
-            <span className="text-[10px] text-[var(--vigil-muted)]">
-              Plan: قراءة/بحث فقط — مفيش كتابة لحد Execute
-            </span>
-          ) : null}
-          {chatMode === "ask" ? (
-            <span className="text-[10px] text-[var(--vigil-muted)]">
-              Ask: نقاش واستكشاف — بدون تعديل ملفات
-            </span>
-          ) : null}
-        </div>
         {toolApproval && (
           <div className="mb-2 rounded-md border border-[var(--vigil-accent)] bg-[var(--vigil-accent-soft)] p-2 text-xs">
             <div className="font-medium text-[var(--vigil-text)]">
@@ -2701,7 +2800,11 @@ export function ChatPanel() {
                             ? "▤"
                             : chip.kind === "virtual"
                               ? "@"
-                              : "⌘"}
+                              : chip.kind === "sql_table"
+                                ? "▦"
+                                : chip.kind === "sql_snippet"
+                                  ? "SQL"
+                                  : "⌘"}
                   </span>
                   {isPath && chip.path ? (
                     <button
@@ -2725,8 +2828,16 @@ export function ChatPanel() {
                     </button>
                   ) : (
                     <span className="truncate font-medium">
-                      @{chip.title}
-                      {chip.kind === "virtual" ? "" : ` (${chip.detail})`}
+                      {chip.kind === "sql_table"
+                        ? `@table:${chip.sqlObject || chip.title}`
+                        : chip.kind === "sql_snippet"
+                          ? `@sql:${chip.title}`
+                          : `@${chip.title}`}
+                      {chip.kind === "virtual" ||
+                      chip.kind === "sql_table" ||
+                      chip.kind === "sql_snippet"
+                        ? ""
+                        : ` (${chip.detail})`}
                     </span>
                   )}
                   <button
@@ -2909,50 +3020,54 @@ export function ChatPanel() {
           </p>
         )}
 
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <ModelSelect />
-            <ChatQuickSettingsButton />
-            <button
-              type="button"
-              title="Attach"
-              aria-label="Attach"
-              className="flex h-8 w-8 items-center justify-center rounded-md bg-sky-600 !text-white hover:bg-sky-700"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip className="h-4 w-4" />
-            </button>
-            <ClipShelfButton />
-            <button
-              type="button"
-              title="Clear text and attachments"
-              aria-label="Clear text and attachments"
-              disabled={
-                !draft.trim() &&
-                attachments.length === 0 &&
-                contextChips.length === 0
-              }
-              className="flex h-8 w-8 items-center justify-center rounded-md bg-rose-600 !text-white hover:bg-rose-700 disabled:opacity-40"
-              onClick={clearComposer}
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-            <SpeechDictationMicButton
-              size="md"
-              vivid
-              active={listening}
-              onClick={() => toggleMic()}
-              title={listening ? "Stop dictation" : "Start dictation"}
-            />
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*,*/*"
-              className="hidden"
-              onChange={(e) => onFilesSelected(e.target.files)}
-            />
-          </div>
+        <div className="mt-1 flex flex-nowrap items-center gap-1.5">
+          <ModelSelect />
+          <ChatModeSelect
+            chatMode={chatMode}
+            setChatMode={setChatMode}
+            isRunning={isRunning}
+          />
+          <ChatQuickSettingsButton />
+          <button
+            type="button"
+            title="Attach"
+            aria-label="Attach"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-600 !text-white hover:bg-sky-700"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+          <ClipShelfButton />
+          <button
+            type="button"
+            title="Clear text and attachments"
+            aria-label="Clear text and attachments"
+            disabled={
+              !draft.trim() &&
+              attachments.length === 0 &&
+              contextChips.length === 0
+            }
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rose-600 !text-white hover:bg-rose-700 disabled:opacity-40"
+            onClick={clearComposer}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+          <SpeechDictationMicButton
+            size="md"
+            vivid
+            className="shrink-0"
+            active={listening}
+            onClick={() => toggleMic()}
+            title={listening ? "Stop dictation" : "Start dictation"}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,*/*"
+            className="hidden"
+            onChange={(e) => onFilesSelected(e.target.files)}
+          />
           <button
             type={isRunning ? "button" : "submit"}
             disabled={!isRunning && !canSend}
@@ -2966,7 +3081,7 @@ export function ChatPanel() {
                   }
                 : undefined
             }
-            className={`flex h-9 w-9 items-center justify-center rounded-full !text-white disabled:opacity-40 ${
+            className={`ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full !text-white disabled:opacity-40 ${
               isRunning
                 ? "bg-[var(--vigil-danger)]"
                 : "bg-[var(--vigil-accent)]"
@@ -2975,7 +3090,7 @@ export function ChatPanel() {
             {isRunning ? (
               <Square className="h-3.5 w-3.5 fill-current" />
             ) : (
-              <ArrowUp className="h-5 w-5" />
+              <ArrowUp className="h-4 w-4" />
             )}
           </button>
         </div>

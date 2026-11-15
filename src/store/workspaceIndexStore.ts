@@ -17,6 +17,7 @@ import {
   updateLocalCodeIndexFile,
   type CodeIndexSummary,
 } from "../lib/cline-engine";
+import { useAgentSettingsStore } from "./agentSettingsStore";
 
 const SYMBOL_RG =
   "rg -n --color never " +
@@ -106,7 +107,8 @@ export const useWorkspaceIndexStore = create<WorkspaceIndexState>((set, get) => 
     // Local BM25 code index (sidecar) — best-effort, does not block @mentions.
     set({ semanticIndexing: true });
     try {
-      const semantic = await ensureLocalCodeIndex(false);
+      const maxFiles = useAgentSettingsStore.getState().indexMaxFiles;
+      const semantic = await ensureLocalCodeIndex(false, { maxFiles });
       set({
         semantic,
         semanticIndexing: false,

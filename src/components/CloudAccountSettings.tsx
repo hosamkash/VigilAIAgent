@@ -9,10 +9,9 @@ import {
   getConfiguredVigilWebUrl,
   isVigilWebConfigured,
   setConfiguredVigilWebUrl,
-  vigilWebEmbedUrl,
 } from "../lib/cloud/vigil-web-url";
 import { useCloudAuthStore } from "../store/cloudAuthStore";
-import { useEditorTabsStore } from "../store/editorTabsStore";
+import { openCloudEmbedTab } from "../lib/cloud/open-cloud-embed";
 import { usePlanStore } from "../store/planStore";
 import { useTabsStore } from "../store/tabsStore";
 
@@ -27,6 +26,8 @@ export function CloudAccountSettings() {
   const signUp = useCloudAuthStore((s) => s.signUp);
   const signOut = useCloudAuthStore((s) => s.signOut);
   const clearError = useCloudAuthStore((s) => s.clearError);
+  const billing = useCloudAuthStore((s) => s.billing);
+  const refreshBilling = useCloudAuthStore((s) => s.refreshBilling);
   const activePlan = usePlanStore((s) => s.activePlan);
 
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -37,6 +38,12 @@ export function CloudAccountSettings() {
   const [webUrl, setWebUrl] = useState(() => getConfiguredVigilWebUrl());
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
 
+  useEffect(() => {
+    const next = getConfiguredVigilWebUrl();
+    setWebUrl(next);
+    if (next) setConfiguredVigilWebUrl(next);
+  }, []);
+
   function openCloudEmbed() {
     setConfiguredVigilWebUrl(webUrl);
     if (!isVigilWebConfigured()) {
@@ -45,8 +52,8 @@ export function CloudAccountSettings() {
       );
       return;
     }
-    useEditorTabsStore.getState().openBrowser(vigilWebEmbedUrl());
-    setNote("Opened Vigil Cloud embed tab (?embed=1).");
+    openCloudEmbedTab({ focus: true });
+    setNote("Opened Vigil Cloud embed tab (?embed=1) — same Firestore history as the web.");
   }
 
   useEffect(() => {
@@ -176,11 +183,19 @@ export function CloudAccountSettings() {
           <div className="text-xs text-[var(--vigil-muted)]">
             {user.email || user.uid}
           </div>
-          {walletBalance != null ? (
+          {walletBalance != null || billing?.tokenBalance != null ? (
             <div className="mt-1 text-xs text-[var(--vigil-muted)]">
-              Shared wallet: {walletBalance.toLocaleString()} tokens
+              Shared wallet:{" "}
+              {(billing?.tokenBalance ?? walletBalance ?? 0).toLocaleString()}{" "}
+              tokens
+              {billing?.planTier ? ` · ${billing.planTier}` : ""}
             </div>
           ) : null}
+          <p className="mt-1 text-[11px] text-[var(--vigil-muted)]">
+            Kashier Live keys are still an ops step. Checkout on Vigil Web stays
+            Test until Live MID keys are set — wallet + webhook activation
+            already work.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -245,6 +260,18 @@ export function CloudAccountSettings() {
               onClick={() => openCloudEmbed()}
             >
               Open Vigil Cloud
+            </button>
+            <button
+              type="button"
+              className="rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs"
+              onClick={() => {
+                setConfiguredVigilWebUrl(webUrl);
+                openCloudEmbedTab({ focus: true, nextPath: "/app/pricing" });
+                void refreshBilling();
+                setNote("Opened Pricing in Vigil Cloud.");
+              }}
+            >
+              Pricing / wallet
             </button>
           </div>
         </div>

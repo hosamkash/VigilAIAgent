@@ -148,6 +148,11 @@ export function buildScmMenu(opts: {
           disabled: history,
         },
         {
+          id: "pushWatchCi",
+          label: "Push & watch CI…",
+          disabled: history,
+        },
+        {
           id: "openPullRequest",
           label: "Open PR Page on Remote…",
           disabled: history,

@@ -1,6 +1,6 @@
 /**
  * Push / pull chat sessions to Firestore (account-scoped).
- * Best-effort: local VigilDB remains the offline cache until web embed lands.
+ * Firestore is SoR when signed in; VigilDB is the offline cache.
  */
 
 import {

@@ -32,13 +32,21 @@ import {
   loadPlanArtifact,
   savePlanArtifact,
 } from "../lib/plan-artifact-fs";
-import { postPlanExecutionStatus } from "../lib/cloud/post-execution-status";
+import {
+  postPlanExecutionStatus,
+  postPlanUpdated,
+} from "../lib/cloud/post-execution-status";
 import { getWorkspaceCwd } from "../lib/secure-storage";
 
 function notifyCloudExecution(plan: PlanArtifact | null): void {
   if (!plan?.id) return;
   try {
-    postPlanExecutionStatus(plan.id, plan.status);
+    const steps = plan.steps || [];
+    const done = steps.filter((s) => s.status === "completed").length;
+    postPlanExecutionStatus(plan.id, plan.status, {
+      done,
+      total: steps.length,
+    });
   } catch {
     /* ignore */
   }
@@ -49,6 +57,33 @@ function notifyCloudExecution(plan: PlanArtifact | null): void {
     .catch(() => {
       /* offline */
     });
+}
+
+/** Throttle mid-run plan pushes so web pollers see step progress without flooding. */
+let pendingCloudPlan: PlanArtifact | null = null;
+let cloudPlanPushTimer: ReturnType<typeof setTimeout> | null = null;
+const CLOUD_PLAN_PUSH_MS = 2000;
+
+function scheduleCloudPlanPush(plan: PlanArtifact): void {
+  pendingCloudPlan = plan;
+  if (cloudPlanPushTimer) return;
+  cloudPlanPushTimer = setTimeout(() => {
+    cloudPlanPushTimer = null;
+    const next = pendingCloudPlan;
+    pendingCloudPlan = null;
+    if (!next) return;
+    void (async () => {
+      try {
+        const { useCloudAuthStore } = await import("./cloudAuthStore");
+        const { pushPlanToCloud } = await import("../lib/cloud/plans-sync");
+        const uid = useCloudAuthStore.getState().user?.uid;
+        if (uid) await pushPlanToCloud(next, uid);
+        notifyCloudExecution(next);
+      } catch {
+        /* offline */
+      }
+    })();
+  }, CLOUD_PLAN_PUSH_MS);
 }
 
 type PlanStoreState = {
@@ -182,6 +217,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
       const { pushPlanToCloud } = await import("../lib/cloud/plans-sync");
       const uid = useCloudAuthStore.getState().user?.uid;
       if (uid) await pushPlanToCloud(saved, uid);
+      postPlanUpdated(saved.id, saved.status);
     } catch {
       /* offline / not configured — local save already succeeded */
     }
@@ -370,6 +406,8 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
           /* ignore persist race */
         }
       }
+      // Continuum: mirror step statuses to Firestore for web/phone pollers.
+      scheduleCloudPlanPush({ ...plan, workspaceRoot: workspaceRoot || plan.workspaceRoot });
       return;
     }
 
@@ -393,6 +431,10 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
         /* ignore persist race */
       }
     }
+    scheduleCloudPlanPush({
+      ...merged,
+      workspaceRoot: workspaceRoot || merged.workspaceRoot,
+    });
   },
 
   updateStep: (stepId, patch) => {

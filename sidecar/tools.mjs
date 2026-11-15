@@ -32,8 +32,13 @@ import {
   app_close,
   app_profiles_list,
   app_profiles_save,
+  app_discover_installed,
   getDesktopSession,
 } from "./desktop-app.mjs";
+import {
+  sql_glossary_search,
+  saveGlossaryTerm,
+} from "./sql-glossary.mjs";
 import {
   sql_connect,
   sql_disconnect,
@@ -42,6 +47,10 @@ import {
   sql_list_objects,
   sql_describe_table,
   sql_run,
+  sql_use_database,
+  sql_set_mode,
+  sql_get_object_ddl,
+  sql_explain,
   sql_activity_live,
   sql_capture_start,
   sql_capture_stop,
@@ -56,6 +65,15 @@ import {
   normalizeSupportTicket,
   saveSupportTicketFile,
 } from "./support-ticket.mjs";
+import {
+  addAllowlistHost,
+  listAllowHosts,
+  loadAllowlist,
+  removeAllowlistHost,
+} from "./secure-allowlist.mjs";
+import { runPassiveScan } from "./secure-passive.mjs";
+import { runActiveScan } from "./secure-active.mjs";
+import { explainFinding } from "./secure-education.mjs";
 import {
   applyPlanUpdate,
   formatPlanSummary,
@@ -84,6 +102,10 @@ import {
   formatDelegateSummary,
 } from "./parallel-agents.mjs";
 import { runFocusedSubagent } from "./subagent.mjs";
+import {
+  isDelegateCancelled,
+  resetDelegateCancel,
+} from "./delegate-runtime.mjs";
 
 function unwrapApp(result) {
   if (!result?.ok) {
@@ -292,6 +314,10 @@ export async function search_codebase(
   if (!q) {
     return { ok: false, output: "", error: "search_codebase requires query" };
   }
+  const timeoutMs = Math.max(
+    2_000,
+    Math.min(30_000, Number(process.env.VIGIL_SEARCH_TIMEOUT_MS) || 12_000),
+  );
 
   // 0) Deep local index (BM25 + vectors + import graph) — sync/build if needed.
   let indexSection = "";
@@ -332,10 +358,19 @@ export async function search_codebase(
       { cwd, env: process.env },
     );
     let stdout = "";
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
+      resolve([]);
+    }, timeoutMs);
     child.stdout.on("data", (c) => {
       stdout += c.toString();
     });
     child.on("close", () => {
+      clearTimeout(timer);
       const needle = q.toLowerCase();
       const ranked = stdout
         .split("\n")
@@ -357,7 +392,10 @@ export async function search_codebase(
         .slice(0, 20);
       resolve(ranked);
     });
-    child.on("error", () => resolve([]));
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve([]);
+    });
   });
 
   // 2) Content matches (symbol / call sites).
@@ -932,6 +970,14 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       execute: async (input = {}) => {
         const result = await find_definition(input.symbol || "", toolCwd(input));
         if (!result.ok) throw new Error(result.error || "find_definition failed");
+        if (Array.isArray(result.locations) && result.locations.length) {
+          fire({
+            type: "tool",
+            toolName: "find_definition",
+            hook: "end",
+            locations: result.locations,
+          });
+        }
         return result.output;
       },
     },
@@ -1048,7 +1094,13 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
           delegateJobs: jobs.map((j) => ({ ...j })),
         });
 
+        resetDelegateCancel();
         await mapPool(jobs, concurrency, async (job) => {
+          if (isDelegateCancelled()) {
+            job.status = "cancelled";
+            job.error = "cancelled";
+            return;
+          }
           job.status = "running";
           fire({
             type: "tool",
@@ -1082,7 +1134,11 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
             autoRun: sub.autoRun !== false,
             emit: fire,
           });
-          if (result.ok) {
+          if (isDelegateCancelled() || result.error === "cancelled") {
+            job.status = "cancelled";
+            job.error = "cancelled";
+            job.result = result.text || "";
+          } else if (result.ok) {
             job.status = "completed";
             job.result = result.text;
           } else {
@@ -1633,6 +1689,21 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       execute: async (input) => unwrapApp(await app_profiles_save(input, cwd)),
     },
     {
+      name: "app_discover_installed",
+      description:
+        "Search installed desktop apps (macOS /Applications, Windows Program Files). Returns name + path to launch or save as a profile.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Name substring" },
+          max: { type: "number" },
+        },
+      },
+      executionMode: "parallel",
+      execute: async (input = {}) =>
+        unwrapApp(await app_discover_installed(input)),
+    },
+    {
       name: "app_close",
       description: "Windows only. Close the attached/launched desktop app and stop the UI driver.",
       inputSchema: { type: "object", properties: {} },
@@ -1748,12 +1819,16 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
     },
     {
       name: "sql_list_objects",
-      description: "List tables/views (optional schema filter).",
+      description:
+        "List tables/views/procedures/functions (optional schema filter). kind=all includes routines.",
       inputSchema: {
         type: "object",
         properties: {
           schema: { type: "string" },
-          kind: { type: "string", description: "table | view | all" },
+          kind: {
+            type: "string",
+            description: "table | view | all | procedure | function | routine",
+          },
         },
       },
       execute: async (input) => unwrapSql(await sql_list_objects(input)),
@@ -1772,6 +1847,64 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       execute: async (input) => unwrapSql(await sql_describe_table(input)),
     },
     {
+      name: "sql_get_object_ddl",
+      description:
+        "Get DDL for a table/view/proc/function (script or synthesized CREATE TABLE).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "schema.name or name" },
+          name: { type: "string" },
+          schema: { type: "string" },
+          kind: {
+            type: "string",
+            description: "auto | table | view | procedure | function",
+          },
+        },
+      },
+      execute: async (input) => unwrapSql(await sql_get_object_ddl(input)),
+    },
+    {
+      name: "sql_use_database",
+      description:
+        "Switch the active database on the current Support session (reconnects with same credentials).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          database: { type: "string" },
+        },
+        required: ["database"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const out = unwrapSql(await sql_use_database(input));
+        emitSqlSession(fire);
+        return out;
+      },
+    },
+    {
+      name: "sql_set_mode",
+      description:
+        "Toggle session read vs write. Write requires confirm:true. Prefer read-only for support.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { type: "string", description: "read | write" },
+          confirm: {
+            type: "boolean",
+            description: "Must be true to enable write mode",
+          },
+        },
+        required: ["mode"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const out = unwrapSql(await sql_set_mode(input));
+        emitSqlSession(fire);
+        return out;
+      },
+    },
+    {
       name: "sql_run",
       description:
         "Run SQL on the connected DB. Default session is read-only (SELECT/WITH/EXPLAIN). Results capped.",
@@ -1785,6 +1918,50 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       },
       executionMode: "sequential",
       execute: async (input) => unwrapSql(await sql_run(input)),
+    },
+    {
+      name: "sql_explain",
+      description:
+        "Explain plan for a SELECT/WITH. Postgres: optional analyze+confirmAnalyze. SQL Server: estimated SHOWPLAN_TEXT.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sql: { type: "string" },
+          analyze: { type: "boolean" },
+          confirmAnalyze: { type: "boolean" },
+        },
+        required: ["sql"],
+      },
+      execute: async (input) => unwrapSql(await sql_explain(input)),
+    },
+    {
+      name: "sql_glossary_search",
+      description:
+        "Search the local Support glossary (.vigil/glossary.json) for Arabic/English business terms mapped to table.column.",
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+      executionMode: "parallel",
+      execute: async (input) =>
+        unwrapSql(await sql_glossary_search(cwd, input.query)),
+    },
+    {
+      name: "sql_glossary_save",
+      description:
+        "Add a glossary term (ar/en → table.column) under .vigil/glossary.json. No secrets.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ar: { type: "string" },
+          en: { type: "string" },
+          table: { type: "string" },
+          column: { type: "string" },
+          note: { type: "string" },
+        },
+      },
+      execute: async (input) => unwrapSql(await saveGlossaryTerm(cwd, input)),
     },
     {
       name: "sql_activity_live",
@@ -1939,6 +2116,273 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
           .join("\n");
       },
     },
+    // --- Vigil Secure (Phase A: allowlist + passive) ---
+    {
+      name: "secure_allowlist_list",
+      description:
+        "List authorized Secure scan hosts for this workspace (.vigil/secure-allowlist.json). " +
+        "localhost / 127.0.0.1 are always allowed without listing.",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        const data = await loadAllowlist(cwd);
+        if (!data.hosts.length) {
+          return "Allowlist empty. localhost/127.0.0.1 always OK. Use secure_allowlist_add for remote hosts (confirm=true).";
+        }
+        return data.hosts
+          .map(
+            (h) =>
+              `- ${h.host}${h.ownership ? ` (${h.ownership})` : ""}${h.note ? ` — ${h.note}` : ""}`,
+          )
+          .join("\n");
+      },
+    },
+    {
+      name: "secure_allowlist_add",
+      description:
+        "Add a host to the Secure allowlist. Remote hosts REQUIRE confirm=true " +
+        "(user ownership confirmation). Never add arbitrary third-party sites.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          host: { type: "string" },
+          confirm: {
+            type: "boolean",
+            description: "Required true for non-localhost hosts",
+          },
+          note: { type: "string" },
+          ownership: { type: "string" },
+        },
+        required: ["host"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        const saved = await addAllowlistHost(cwd, input);
+        fire({
+          type: "tool",
+          toolName: "secure_allowlist_add",
+          hook: "update",
+          secureAllowlist: saved,
+        });
+        return `Allowlist updated (${saved.hosts.length} host(s)).`;
+      },
+    },
+    {
+      name: "secure_allowlist_remove",
+      description: "Remove a host from the Secure allowlist.",
+      inputSchema: {
+        type: "object",
+        properties: { host: { type: "string" } },
+        required: ["host"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        const saved = await removeAllowlistHost(cwd, input.host);
+        fire({
+          type: "tool",
+          toolName: "secure_allowlist_remove",
+          hook: "update",
+          secureAllowlist: saved,
+        });
+        return `Removed ${String(input.host || "")}. ${saved.hosts.length} host(s) remain.`;
+      },
+    },
+    {
+      name: "secure_scan_passive",
+      description:
+        "Run Vigil Secure Quick/passive pack on an AUTHORIZED target only " +
+        "(localhost, project preview, or allowlisted host). Checks security headers, " +
+        "cookie flags, HTTPS hints, secret heuristics in workspace, and npm audit. " +
+        "Hard-fails unauthorized URLs. Prefer remediation (fix) over weaponization. " +
+        "Explain findings simply in the user's language (AR/EN education included).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "Target URL (default: project preview / localhost)",
+          },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        let url = String(input.url || "").trim();
+        let previewUrl = null;
+        try {
+          previewUrl = await detectProjectUrl(cwd);
+        } catch {
+          previewUrl = null;
+        }
+        if (!url) url = previewUrl || "http://127.0.0.1:5173";
+        const allowHosts = await listAllowHosts(cwd);
+        const result = await runPassiveScan({
+          url,
+          workspaceRoot: cwd,
+          allowHosts,
+          previewUrl,
+        });
+        fire({
+          type: "tool",
+          toolName: "secure_scan_passive",
+          hook: "update",
+          secureScan: result,
+        });
+        if (!result.ok) {
+          throw new Error(result.error || "Secure scan blocked");
+        }
+        const lines = [
+          `Vigil Secure passive scan → ${result.target}`,
+          `Findings: ${result.summary.total} (critical=${result.summary.critical} high=${result.summary.high} medium=${result.summary.medium} low=${result.summary.low} info=${result.summary.info})`,
+          "",
+        ];
+        for (const f of result.findings.slice(0, 40)) {
+          lines.push(
+            `### [${f.severity}] ${f.title}`,
+            f.detail,
+            f.path ? `Path: ${f.path}` : null,
+            f.evidence ? `Evidence: ${f.evidence}` : null,
+            `Fix hint: ${f.education?.fixHint || ""}`,
+            `AR: ${f.educationAr?.what || ""}`,
+            "",
+          );
+        }
+        return lines.filter((x) => x != null).join("\n");
+      },
+    },
+    {
+      name: "secure_scan_active",
+      description:
+        "Run Vigil Secure active (Standard) pack on an AUTHORIZED target. " +
+        "REQUIRES confirm:true after the user explicitly starts Active scan. " +
+        "Safe curated probes only: sensitive paths, directory listing, reflected " +
+        "XSS marker, CSRF form heuristics, admin-path reachability, verbose errors. " +
+        "No DoS, no credential stuffing, no exploit kits. Hard-fails unauthorized URLs.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string" },
+          confirm: {
+            type: "boolean",
+            description: "Must be true — explicit user Start Active",
+          },
+        },
+        required: ["confirm"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        let url = String(input.url || "").trim();
+        let previewUrl = null;
+        try {
+          previewUrl = await detectProjectUrl(cwd);
+        } catch {
+          previewUrl = null;
+        }
+        if (!url) url = previewUrl || "http://127.0.0.1:5173";
+        const allowHosts = await listAllowHosts(cwd);
+        const result = await runActiveScan({
+          url,
+          allowHosts,
+          previewUrl,
+          confirm: input.confirm === true,
+        });
+        fire({
+          type: "tool",
+          toolName: "secure_scan_active",
+          hook: "update",
+          secureScan: result,
+        });
+        if (!result.ok) {
+          throw new Error(result.error || "Active Secure scan blocked");
+        }
+        const lines = [
+          `Vigil Secure ACTIVE scan → ${result.target}`,
+          `Findings: ${result.summary.total} (critical=${result.summary.critical} high=${result.summary.high} medium=${result.summary.medium} low=${result.summary.low} info=${result.summary.info})`,
+          "",
+        ];
+        for (const f of result.findings.slice(0, 40)) {
+          lines.push(
+            `### [${f.severity}] ${f.title}`,
+            f.detail,
+            f.path ? `Path: ${f.path}` : null,
+            f.evidence ? `Evidence: ${f.evidence}` : null,
+            `Fix hint: ${f.education?.fixHint || ""}`,
+            `AR: ${f.educationAr?.what || ""}`,
+            "",
+          );
+        }
+        return lines.filter((x) => x != null).join("\n");
+      },
+    },
+    {
+      name: "secure_report_export",
+      description:
+        "Export a Vigil Secure markdown report for an AUTHORIZED target " +
+        "(re-runs Quick/passive pack). Disclaimer: not a certified pentest. " +
+        "Writes .vigil/secure-reports/report-*.md locally — never uploads the repo.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string" },
+          lang: { type: "string", description: "en | ar" },
+        },
+      },
+      execute: async (input = {}) => {
+        let url = String(input.url || "").trim();
+        let previewUrl = null;
+        try {
+          previewUrl = await detectProjectUrl(cwd);
+        } catch {
+          previewUrl = null;
+        }
+        if (!url) url = previewUrl || "http://127.0.0.1:5173";
+        const allowHosts = await listAllowHosts(cwd);
+        const result = await runPassiveScan({
+          url,
+          workspaceRoot: cwd,
+          allowHosts,
+          previewUrl,
+        });
+        if (!result.ok) throw new Error(result.error || "Secure report blocked");
+        const ar = String(input.lang || "en").startsWith("ar");
+        const lines = [
+          ar ? "# تقرير Vigil Secure" : "# Vigil Secure Report",
+          "",
+          ar
+            ? "مساعد دفاعي على هدف مصرّح — ليس اختبار اختراق معتمد."
+            : "Defensive assistant on an authorized target — not a certified pentest.",
+          "",
+          `Target: ${result.target}`,
+          `Findings: ${result.summary.total}`,
+          "",
+        ];
+        for (const f of result.findings) {
+          lines.push(`### [${f.severity}] ${f.title}`, f.detail, "");
+        }
+        const dir = path.join(cwd, ".vigil", "secure-reports");
+        await fs.mkdir(dir, { recursive: true });
+        const file = path.join(dir, `report-${Date.now()}.md`);
+        await fs.writeFile(file, lines.join("\n"), "utf8");
+        return `Wrote Secure report: ${file}`;
+      },
+    },
+    {
+      name: "secure_explain",
+      description:
+        "Plain Arabic/English explanation for a Secure finding category " +
+        "(xss/csp/cookies/deps/secrets…) — educational, not an exploit guide.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          category: { type: "string" },
+          lang: { type: "string", description: "en | ar" },
+        },
+        required: ["category"],
+      },
+      execute: async (input = {}) => {
+        const lang = String(input.lang || "en").startsWith("ar") ? "ar" : "en";
+        const e = explainFinding(String(input.category), lang);
+        return `${e.title}\n\nWhat: ${e.what}\nWhy: ${e.why}\nFix: ${e.fixHint}`;
+      },
+    },
   ];
 
   if (workerMode) {
@@ -1971,6 +2415,7 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       "app_wait",
       "app_profiles_list",
       "app_profiles_save",
+      "app_discover_installed",
       "app_close",
       "sql_connect",
       "sql_disconnect",
@@ -1980,13 +2425,24 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       "sql_list_databases",
       "sql_list_objects",
       "sql_describe_table",
+      "sql_get_object_ddl",
+      "sql_use_database",
+      "sql_set_mode",
       "sql_run",
+      "sql_explain",
+      "sql_glossary_search",
+      "sql_glossary_save",
       "sql_activity_live",
       "sql_capture_start",
       "sql_capture_stop",
       "sql_capture_list",
       "draft_support_ticket",
       "list_support_tickets",
+      "secure_allowlist_add",
+      "secure_allowlist_remove",
+      "secure_scan_passive",
+      "secure_scan_active",
+      "secure_report_export",
       "create_pull_request",
     ]);
     return tools.filter((t) => !blocked.has(t.name));

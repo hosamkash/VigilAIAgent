@@ -40,10 +40,24 @@ export {
 } from "./usage";
 export {
   buildVigilContinueUrl,
+  buildVigilChatUrl,
+  buildVigilOpenFolderUrl,
   parseVigilDeepLink,
 } from "./deep-link";
 export type { VigilDeepLink } from "./deep-link";
 export { getOrCreateLocalDeviceId, touchCloudDevice } from "./devices";
+export {
+  sanitizeBrowserVisitInput,
+  loadLocalBrowserVisits,
+  saveLocalBrowserVisits,
+  mergeVisitIntoList,
+  mergeBrowserVisitLists,
+  pushBrowserVisitToCloud,
+  listCloudBrowserVisits,
+  visitToCloudDoc,
+  BROWSER_HISTORY_MAX,
+} from "./browser-history";
+export type { BrowserVisit } from "./browser-history";
 export {
   hydrateLocalChatsFromCloud,
   hydrateLocalPlansFromCloud,

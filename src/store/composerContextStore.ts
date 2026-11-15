@@ -15,7 +15,8 @@ export type ComposerContextChip = {
     | "symbol"
     | "virtual"
     | "selection"
-    | "sql_table";
+    | "sql_table"
+    | "sql_snippet";
   title: string;
   detail: string;
   text: string;
@@ -72,6 +73,11 @@ interface ComposerContextState {
     schema: string;
     name: string;
     columnsPreview?: string;
+    connectionLabel?: string | null;
+  }) => string | null;
+  addSqlSnippet: (input: {
+    title: string;
+    text: string;
     connectionLabel?: string | null;
   }) => string | null;
   addExplorerItems: (
@@ -147,6 +153,16 @@ export function formatComposerContext(chips: ComposerContextChip[]): string {
           `[/SQL table reference]`
         );
       }
+      if (chip.kind === "sql_snippet") {
+        return (
+          `[SQL snippet: ${chip.title}]\n` +
+          (chip.detail ? `connection: ${chip.detail}\n` : "") +
+          "```sql\n" +
+          `${chip.text}\n` +
+          "```\n" +
+          `[/SQL snippet]`
+        );
+      }
       return "";
     })
     .filter(Boolean)
@@ -164,6 +180,9 @@ export function formatComposerChipLabels(chips: ComposerContextChip[]): string {
       }
       if (chip.kind === "sql_table") {
         return `@table:${chip.sqlObject || chip.title}`;
+      }
+      if (chip.kind === "sql_snippet") {
+        return `@sql:${chip.title}`;
       }
       if (chip.kind === "selection") {
         return `@${chip.detail} (${chip.title})`;
@@ -344,6 +363,25 @@ export const useComposerContextStore = create<ComposerContextState>((set, get) =
             ? `object: ${sqlObject}\n${preview}`
             : `object: ${sqlObject}`,
           sqlObject,
+        },
+      ],
+    }));
+    return id;
+  },
+  addSqlSnippet: (input) => {
+    const text = clipText(String(input.text || "").trim());
+    if (!text) return null;
+    const title = (input.title || "SQL").trim().slice(0, 48) || "SQL";
+    const id = crypto.randomUUID();
+    set((state) => ({
+      chips: [
+        ...state.chips,
+        {
+          id,
+          kind: "sql_snippet",
+          title,
+          detail: input.connectionLabel || "DB",
+          text,
         },
       ],
     }));

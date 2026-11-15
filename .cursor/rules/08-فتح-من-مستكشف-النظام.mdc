@@ -1,0 +1,63 @@
+---
+description: "08 فتح المجلد من مستكشف ويندوز / فايندر"
+alwaysApply: true
+---
+
+<!-- ===== فهرس عربي / اقرأني أول ===== -->
+**أولوية التنفيذ: 08** — فتح المشروع من كليك يمين في النظام (زي Cursor)
+
+> **بالعربي (الغرض):** كليك يمين على مجلد في ويندوز (أو Open With على ماك) → Open with Vigil.
+
+**ترتيب الملفات:** `00` عامة → … → `07` سورس كنترول → `08` فتح من المستكشف
+<!-- ===== نهاية الفهرس العربي ===== -->
+
+# Open folder from OS Explorer / Finder
+
+**Status:** ✅ DONE (v1) — Windows Explorer HKCU menu + launch-arg/`vigil://open` + macOS Open With (`public.folder`) + second process per folder with sidecar port isolation.  
+**Related:** workspace `explorerStore.openWorkspace`, deep links `vigil://`, `.cursor/rules/00-الخطة-العامة-والأولويات.mdc`  
+**Not this:** in-window project combo (cancelled in `07`) — another workspace is another Vigil **window/process** when architecture allows; v1 opens the folder in the running app.
+
+---
+
+> **عربي:** قصة المنتج
+
+## 0. Product story
+
+Right-click a project folder in Windows Explorer → **Open with Vigil** (same habit as Cursor). On Mac, **Open With → Vigil AI Agent** on a folder, or drop the folder on the Dock icon.
+
+---
+
+> **عربي:** إجابات مقفولة
+
+## 1. Hard answers
+
+| Question | Answer |
+|----------|--------|
+| Windows Explorer folder menu? | **Yes** — per-user `HKCU` (no admin) |
+| Inside an open folder (background click)? | **Yes** — `Directory\Background` + `%V` |
+| Right-click a file? | Open the **parent folder** as the workspace |
+| macOS Finder? | **Yes, best-effort:** `public.folder` Open With + Dock drop. Full Finder Sync extension later |
+| In-window project switcher? | **No** — cancelled (`07`) |
+| Kashier / Secure PDF / EXE / Crystal | Separate tracks; EXE+Crystal+PDF reports stay lower than this desktop habit |
+
+---
+
+> **عربي:** تنفيذ
+
+## 2. Implementation
+
+- ✅ Parse CLI / `file://` / `vigil://open?path=` → folder (file → parent)  
+- ✅ Frontend: `take_launch_open_path` on explorer init + `vigil://open-folder` while running  
+- ✅ Windows: install/remove Explorer verbs from Settings → Appearance; auto-install on first Windows launch  
+- ✅ macOS: Info.plist document type `public.folder`  
+- [ ] NSIS installer duplicate of HKCU verbs (release polish)  
+- ✅ Second Vigil process / window per folder (sidecar port isolation)
+
+---
+
+> **عربي:** صندوق الأفكار
+
+## 3. Ideas inbox
+
+- 2026-11-13: User — Cursor-style Explorer “Open with …” on Windows; Mac if possible. Combo switcher stays cancelled.  
+- 2026-11-14: Second process per different folder — skip `single_instance` when `VIGIL_MULTI_INSTANCE=1`; unique `VIGIL_SIDECAR_PORT`; instance registry.  

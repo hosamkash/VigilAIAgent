@@ -284,6 +284,15 @@ export async function fetchCiStatus(cwd: string): Promise<CiStatusSummary> {
   return { state: "unknown", checks: [] };
 }
 
+export function failingCiChecks(summary: CiStatusSummary): CiCheck[] {
+  return summary.checks.filter(
+    (c) =>
+      c.status === "completed" &&
+      !!c.conclusion &&
+      !["success", "neutral", "skipped"].includes(c.conclusion),
+  );
+}
+
 export function formatCiStatusForAgent(summary: CiStatusSummary): string {
   const lines = [
     `CI state: ${summary.state}`,
@@ -297,8 +306,50 @@ export function formatCiStatusForAgent(summary: CiStatusSummary): string {
   if (summary.state === "failure") {
     lines.push(
       "",
-      "Fix failing checks with apply_patch + run_commands, push, then re-check CI.",
+      "Fix failing checks with apply_patch + run_commands, push, then re-check CI. Do not force-push.",
     );
   }
+  return lines.join("\n");
+}
+
+/** Composer prompt: inspect failures, patch, push, re-check. */
+export function buildCiFixPrompt(summary: CiStatusSummary): string {
+  const failed = failingCiChecks(summary);
+  const names = failed.map((c) => c.name).join(", ") || "(see checks)";
+  return [
+    "CI failed on the current branch. Inspect the failing checks, fix the repo, then push and re-check.",
+    "Do not force-push. Prefer apply_patch + run_commands (tests) + push_and_check_ci.",
+    formatCiStatusForAgent(summary),
+    failed.length
+      ? `Priority checks to green: ${names}.`
+      : "If checks are still pending, wait and call get_ci_status again.",
+  ].join("\n\n");
+}
+
+export function draftPrBodyFromPlan(plan: {
+  title?: string;
+  goal?: string;
+  steps?: Array<{ content: string; status?: string }>;
+}): string {
+  const title = String(plan.title || "").trim();
+  const goal = String(plan.goal || "").trim();
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  const lines = [
+    title ? `## ${title}` : "## Summary",
+    goal || "Changes from Vigil Plan Mode.",
+    "",
+    "### Steps",
+    ...(steps.length
+      ? steps.map((s, i) => {
+          const mark =
+            s.status === "completed" || s.status === "done" ? "x" : " ";
+          return `- [${mark}] ${i + 1}. ${String(s.content || "").trim()}`;
+        })
+      : ["- [ ] See commit history"]),
+    "",
+    "### Test plan",
+    "- [ ] Local tests",
+    "- [ ] CI green",
+  ];
   return lines.join("\n");
 }

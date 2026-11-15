@@ -3,9 +3,12 @@ import {
   connectDb,
   disconnectDb,
   listDbProfilesUi,
+  patchDbProfileUi,
   saveDbPassword,
   saveDbProfileUi,
+  setSqlModeUi,
   testDbConnection,
+  useDatabaseUi,
   type DbEngine,
   type DbProfile,
 } from "../lib/db-sidecar";
@@ -19,6 +22,8 @@ export function SupportDbCard({ compact = false }: Props) {
   const clearSession = useSqlSessionStore((s) => s.clear);
   const connected = useSqlSessionStore((s) => s.connected);
   const label = useSqlSessionStore((s) => s.label);
+  const readOnly = useSqlSessionStore((s) => s.readOnly);
+  const databaseActive = useSqlSessionStore((s) => s.database);
 
   const [profiles, setProfiles] = useState<DbProfile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -34,6 +39,7 @@ export function SupportDbCard({ compact = false }: Props) {
   const [password, setPassword] = useState("");
   const [trustCert, setTrustCert] = useState(true);
   const [selectedId, setSelectedId] = useState("");
+  const [wantWrite, setWantWrite] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -120,10 +126,33 @@ export function SupportDbCard({ compact = false }: Props) {
     setNote(null);
     try {
       if (!selectedId) throw new Error("اختر أو احفظ بروفايل أولًا");
-      const session = await connectDb({
+      if (wantWrite) {
+        const ok = window.confirm(
+          "تفعيل Write mode؟ هيسمح بـ INSERT/UPDATE/DELETE/DDL على قاعدة البيانات المتصلة.",
+        );
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+      }
+      let session = await connectDb({
         profileId: selectedId,
         password: password.trim() || undefined,
+        mode: wantWrite ? "write" : "read",
       });
+      const profile = profiles.find((p) => p.id === selectedId);
+      const preferDb = (profile?.lastDatabase || "").trim();
+      if (
+        preferDb &&
+        preferDb !== session.database &&
+        preferDb !== (profile?.database || "")
+      ) {
+        try {
+          session = await useDatabaseUi(preferDb);
+        } catch {
+          /* stay on connect DB */
+        }
+      }
       setSession({
         connected: !!session.connected,
         engine: session.engine,
@@ -132,9 +161,58 @@ export function SupportDbCard({ compact = false }: Props) {
         database: session.database,
         readOnly: session.readOnly !== false,
       });
-      setNote(`Connected · ${session.label || selectedId}`);
+      setNote(
+        `Connected · ${session.label || selectedId}${
+          session.readOnly === false ? " · WRITE" : " · read-only"
+        }${session.database ? ` · ${session.database}` : ""}`,
+      );
       setPassword("");
       void useSqlCatalogStore.getState().refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onToggleWriteMode() {
+    if (!connected) return;
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      if (readOnly) {
+        const ok = window.confirm(
+          "تفعيل Write mode على الجلسة الحالية؟ الجمل الكتابية هتشتغل بدون بوابة القراءة فقط.",
+        );
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+        const session = await setSqlModeUi({ mode: "write", confirm: true });
+        setSession({
+          connected: true,
+          engine: session.engine,
+          profileId: session.profileId,
+          label: session.label,
+          database: session.database,
+          readOnly: false,
+        });
+        setWantWrite(true);
+        setNote("Write mode ON");
+      } else {
+        const session = await setSqlModeUi({ mode: "read" });
+        setSession({
+          connected: true,
+          engine: session.engine,
+          profileId: session.profileId,
+          label: session.label,
+          database: session.database,
+          readOnly: true,
+        });
+        setWantWrite(false);
+        setNote("Read-only restored");
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -205,11 +283,43 @@ export function SupportDbCard({ compact = false }: Props) {
           <option value="">— new —</option>
           {profiles.map((p) => (
             <option key={p.id} value={p.id}>
+              {p.favorite ? "★ " : ""}
               {p.name} ({p.engine}) {p.host}
+              {p.lastDatabase ? ` · ${p.lastDatabase}` : ""}
             </option>
           ))}
         </select>
       </label>
+
+      {selectedId ? (
+        <button
+          type="button"
+          disabled={busy}
+          className="mt-1 text-[10px] text-[var(--vigil-accent)] hover:underline disabled:opacity-50"
+          onClick={() => {
+            void (async () => {
+              const p = profiles.find((x) => x.id === selectedId);
+              if (!p) return;
+              setBusy(true);
+              try {
+                await patchDbProfileUi(selectedId, {
+                  favorite: !p.favorite,
+                });
+                setNote(p.favorite ? "Unstarred profile" : "★ Favorite profile");
+                await refresh();
+              } catch (err) {
+                setError(String(err));
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}
+        >
+          {profiles.find((p) => p.id === selectedId)?.favorite
+            ? "★ Unfavorite"
+            : "☆ Favorite this profile"}
+        </button>
+      ) : null}
 
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         <label className="text-xs">
@@ -287,6 +397,23 @@ export function SupportDbCard({ compact = false }: Props) {
         </label>
       ) : null}
 
+      <label className="mt-2 flex items-center gap-2 text-xs">
+        <input
+          type="checkbox"
+          checked={wantWrite}
+          onChange={(e) => setWantWrite(e.target.checked)}
+          disabled={connected}
+        />
+        Connect in Write mode (confirm on connect)
+      </label>
+
+      {connected ? (
+        <p className="mt-2 text-[10px] text-[var(--vigil-muted)]">
+          Session: {readOnly ? "read-only" : "WRITE"}
+          {databaseActive ? ` · db=${databaseActive}` : ""}
+        </p>
+      ) : null}
+
       <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
@@ -305,14 +432,24 @@ export function SupportDbCard({ compact = false }: Props) {
           Test
         </button>
         {connected ? (
-          <button
-            type="button"
-            disabled={busy}
-            className="rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs disabled:opacity-50"
-            onClick={() => void onDisconnect()}
-          >
-            Disconnect
-          </button>
+          <>
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs disabled:opacity-50"
+              onClick={() => void onToggleWriteMode()}
+            >
+              {readOnly ? "Enable Write…" : "Back to Read-only"}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs disabled:opacity-50"
+              onClick={() => void onDisconnect()}
+            >
+              Disconnect
+            </button>
+          </>
         ) : (
           <button
             type="button"

@@ -65,6 +65,8 @@ export const useSupportTicketStore = create<SupportTicketState>((set, get) => ({
     if (root) await saveSupportTicket(root, ticket);
     set({ activeTicket: ticket, panelOpen: true });
     await get().refreshList();
+    const { openTicketWorkspace } = await import("../lib/open-ticket-workspace");
+    openTicketWorkspace(ticket.id, ticket.title);
     return ticket;
   },
 
@@ -85,6 +87,8 @@ export const useSupportTicketStore = create<SupportTicketState>((set, get) => ({
     if (root) await saveSupportTicket(root, merged);
     set({ activeTicket: merged, panelOpen: true });
     await get().refreshList();
+    const { openTicketWorkspace } = await import("../lib/open-ticket-workspace");
+    openTicketWorkspace(merged.id, merged.title);
     return merged;
   },
 
@@ -139,6 +143,8 @@ export const useSupportTicketStore = create<SupportTicketState>((set, get) => ({
     const ticket = await loadSupportTicket(root, id);
     if (!ticket) return;
     set({ activeTicket: ticket, panelOpen: true });
+    const { openTicketWorkspace } = await import("../lib/open-ticket-workspace");
+    openTicketWorkspace(ticket.id, ticket.title);
   },
 
   archiveTicket: async (id) => {

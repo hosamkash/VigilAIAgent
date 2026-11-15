@@ -192,6 +192,12 @@ export function buildToolPolicies(autoRun) {
     manage_plan: { enabled: true, autoApprove: true },
     draft_support_ticket: { enabled: true, autoApprove: true },
     list_support_tickets: { enabled: true, autoApprove: true },
+    secure_allowlist_list: { enabled: true, autoApprove: true },
+    secure_allowlist_add: { enabled: true, autoApprove: false },
+    secure_allowlist_remove: { enabled: true, autoApprove: false },
+    secure_scan_passive: { enabled: true, autoApprove },
+    secure_scan_active: { enabled: true, autoApprove: false },
+    secure_explain: { enabled: true, autoApprove: true },
     detect_project_scripts: { enabled: true, autoApprove: true },
     get_ci_status: { enabled: true, autoApprove: true },
     prepare_worktree: { enabled: true, autoApprove: false },
@@ -295,6 +301,12 @@ function summarizeApproval(toolName, input) {
   if (toolName === "app_profiles_save") {
     return `Save app profile: ${String(obj.name || obj.id || "profile")}`;
   }
+  if (toolName === "app_discover_installed") {
+    return `Find installed app: ${String(obj.query || obj.name || "")}`;
+  }
+  if (toolName === "sql_glossary_save") {
+    return `Glossary: ${String(obj.ar || obj.en || obj.table || "term")}`;
+  }
   if (toolName === "app_close") {
     return "Close desktop app";
   }
@@ -307,6 +319,18 @@ function summarizeApproval(toolName, input) {
   if (toolName === "sql_run") {
     return `SQL: ${String(obj.sql || "").slice(0, 64)}`;
   }
+  if (toolName === "sql_use_database") {
+    return `Use DB: ${String(obj.database || "")}`;
+  }
+  if (toolName === "sql_set_mode") {
+    return `SQL mode: ${String(obj.mode || "")}`;
+  }
+  if (toolName === "sql_get_object_ddl") {
+    return `DDL: ${String(obj.table || obj.name || "")}`;
+  }
+  if (toolName === "sql_explain") {
+    return `Explain: ${String(obj.sql || "").slice(0, 64)}`;
+  }
   if (toolName === "sql_profiles_save") {
     return `Save DB profile: ${String(obj.name || obj.id || "profile")}`;
   }
@@ -318,6 +342,24 @@ function summarizeApproval(toolName, input) {
   }
   if (toolName === "list_support_tickets") {
     return "List support tickets";
+  }
+  if (toolName === "secure_allowlist_list") {
+    return "List Secure allowlist";
+  }
+  if (toolName === "secure_allowlist_add") {
+    return `Allow Secure host: ${String(obj.host || "")}`;
+  }
+  if (toolName === "secure_allowlist_remove") {
+    return `Remove Secure host: ${String(obj.host || "")}`;
+  }
+  if (toolName === "secure_scan_passive") {
+    return `Secure passive scan: ${String(obj.url || "preview/localhost")}`;
+  }
+  if (toolName === "secure_scan_active") {
+    return `Secure ACTIVE scan: ${String(obj.url || "preview/localhost")}`;
+  }
+  if (toolName === "secure_explain") {
+    return `Explain Secure: ${String(obj.category || "")}`;
   }
   if (toolName === "sql_activity_live") {
     return "SQL activity live snapshot";

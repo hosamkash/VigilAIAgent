@@ -9,6 +9,9 @@ const ALLOW_KEY = "vigil.agent.commandAllowlist";
 const DENY_KEY = "vigil.agent.pathDenylist";
 const CHAT_MODE_KEY = "vigil.agent.chatMode";
 const AUTO_SUGGEST_PLAN_KEY = "vigil.agent.autoSuggestPlanMode";
+const COMPACT_RECENT_KEY = "vigil.agent.compactRecent";
+const COMPACT_CHARS_KEY = "vigil.agent.compactMaxChars";
+const INDEX_MAX_FILES_KEY = "vigil.agent.indexMaxFiles";
 
 /** Agent = code. Plan = draft plan (no writes). Ask = discuss / Q&A (no writes). */
 export type AgentChatMode = "agent" | "plan" | "ask";
@@ -64,6 +67,16 @@ function saveStringList(key: string, value: string[]) {
   }
 }
 
+function loadNumber(key: string, fallback: number, min: number, max: number): number {
+  try {
+    const n = Number(localStorage.getItem(key));
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, Math.round(n)));
+  } catch {
+    return fallback;
+  }
+}
+
 interface AgentSettingsState {
   /** When true, tools run without confirmation (Cursor-like Auto-run / yolo). */
   agentAutoRun: boolean;
@@ -78,11 +91,17 @@ interface AgentSettingsState {
   commandAllowlist: string[];
   /** Paths that always require confirmation for writes (even with Auto-run). */
   pathDenylist: string[];
+  compactRecentCount: number;
+  compactMaxChars: number;
+  indexMaxFiles: number;
   setAgentAutoRun: (value: boolean) => void;
   setChatMode: (value: AgentChatMode) => void;
   setAutoSuggestPlanMode: (value: boolean) => void;
   setCommandAllowlist: (value: string[]) => void;
   setPathDenylist: (value: string[]) => void;
+  setCompactRecentCount: (value: number) => void;
+  setCompactMaxChars: (value: number) => void;
+  setIndexMaxFiles: (value: number) => void;
 }
 
 export const useAgentSettingsStore = create<AgentSettingsState>((set) => ({
@@ -91,6 +110,9 @@ export const useAgentSettingsStore = create<AgentSettingsState>((set) => ({
   autoSuggestPlanMode: loadAutoSuggestPlanMode(),
   commandAllowlist: loadStringList(ALLOW_KEY, DEFAULT_COMMAND_ALLOWLIST),
   pathDenylist: loadStringList(DENY_KEY, DEFAULT_PATH_DENYLIST),
+  compactRecentCount: loadNumber(COMPACT_RECENT_KEY, 6, 2, 20),
+  compactMaxChars: loadNumber(COMPACT_CHARS_KEY, 14_000, 4_000, 40_000),
+  indexMaxFiles: loadNumber(INDEX_MAX_FILES_KEY, 20_000, 500, 50_000),
   setAgentAutoRun: (agentAutoRun) => {
     try {
       localStorage.setItem(AUTO_RUN_KEY, agentAutoRun ? "1" : "0");
@@ -127,5 +149,32 @@ export const useAgentSettingsStore = create<AgentSettingsState>((set) => ({
     const cleaned = pathDenylist.map((s) => s.trim()).filter(Boolean);
     saveStringList(DENY_KEY, cleaned);
     set({ pathDenylist: cleaned });
+  },
+  setCompactRecentCount: (value) => {
+    const compactRecentCount = Math.max(2, Math.min(20, Math.round(value) || 6));
+    try {
+      localStorage.setItem(COMPACT_RECENT_KEY, String(compactRecentCount));
+    } catch {
+      /* ignore */
+    }
+    set({ compactRecentCount });
+  },
+  setCompactMaxChars: (value) => {
+    const compactMaxChars = Math.max(4_000, Math.min(40_000, Math.round(value) || 14_000));
+    try {
+      localStorage.setItem(COMPACT_CHARS_KEY, String(compactMaxChars));
+    } catch {
+      /* ignore */
+    }
+    set({ compactMaxChars });
+  },
+  setIndexMaxFiles: (value) => {
+    const indexMaxFiles = Math.max(500, Math.min(50_000, Math.round(value) || 20_000));
+    try {
+      localStorage.setItem(INDEX_MAX_FILES_KEY, String(indexMaxFiles));
+    } catch {
+      /* ignore */
+    }
+    set({ indexMaxFiles });
   },
 }));

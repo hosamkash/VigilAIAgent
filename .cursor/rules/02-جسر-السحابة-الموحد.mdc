@@ -31,7 +31,7 @@ alwaysApply: true
 
 # Vigil Unified Cloud Bridge — Focus Spec (Phase 1+)
 
-**Status:** EXECUTING — **desktop foundation done** (Auth + schema/rules + Account + chat/plan/usage push + pull chats). **Not closed:** Vigil Web shell (`03`), Admin, embed, billing, Firestore-as-primary UX.  
+**Status:** EXECUTING — **desktop foundation + embed history SoR done.** **Not closed:** Vigil Web extras (`03`), **Kashier Live keys (ops)**, Admin Functions. Wallet chip + Pricing embed CTA shipped; do not invent Live keys.  
 **Checkbox habit:** `[ ]` مش خلص · `🟨` جزئي · `✅` خلص  
 **Read the colors:** أصفر/`[ ]` هنا = لسه شغل حقيقي — مش نسيان توثيق فقط. كثير من الـ `[ ]` في §4/§10 يخص **Vigil Web** مش الديسكتوب.
 **Goal:** One Vigil identity & conversation continuum: discuss anywhere (web) → save Plan → open desktop → **Execute** with full history — without re-explaining. Beat Cursor’s “desktop-only / re-brief the agent” pain.  
@@ -185,7 +185,7 @@ alwaysApply: true
 **Sidebar — differentiators vs ChatGPT (nice)**
 - 🟨 **Desktop Execute** status chip (embed live status; Firestore phone follow-up later)  
 - [ ] **Linked workspace hint** (name only — never file upload)  
-- 🟨 **Continue on Desktop** — `vigil://continue?planId=&execute=1` + web CTA (QR later)  
+- ✅ **Continue on Desktop** — `vigil://continue?planId=&execute=1` + `vigil://chat` CTAs (QR later)  
 
 **Main canvas**
 - 🟨 Streaming chat + model picker (Admin-enabled providers; entitlement polish later)  
@@ -202,12 +202,13 @@ alwaysApply: true
 - ✅ Desktop **Account** login (Firebase Auth email/password) — Settings → Account  
 - ✅ Best-effort **plan + chat sync to Firestore** when signed in (`persistActive` / `persistTab`)  
 - ✅ Pull chats from cloud → VigilDB (Account button + auto after sign-in)  
-- 🟨 Fallback native history merges cloud chats — Firestore-primary via **embed** preferred  
-- 🟨 Host Vigil Web in desktop **Browser iframe** (`view.cloud` / auto-open after sign-in → `/embed/auth?embed=1`)  
-- 🟨 Auth token bridge: desktop `postMessage` idToken → web `/api/session` (`vigil:auth-handoff`)  
-- 🟨 Chat history in embed === Firestore when session cookie set  
-- 🟨 Desktop Execute from embed: `vigil:request-execute` → Plan Mode `beginExecute`  
-- 🟨 Clear UX entry: “Vigil Cloud (Web)” menu + Account Open button vs local agent chat
+- ✅ Fallback native history merges cloud chats — signed-in History opens **embed** (Local restore = cache)  
+- ✅ Host Vigil Web in desktop **Browser iframe** (`view.cloud` / auto-open after sign-in → `/embed/auth?embed=1`)  
+- ✅ Auth token bridge: desktop `postMessage` idToken → web `/api/session` (`vigil:auth-handoff`)  
+- ✅ Chat history in embed === Firestore when session cookie set (native ChatPanel is agent/offline cache)  
+- ✅ Desktop Execute from embed: `vigil:request-execute` → Plan Mode `beginExecute`  
+- ✅ `vigil:plan-updated` both directions (web approve ↔ desktop persist/open)  
+- ✅ Clear UX entry: “Vigil Cloud (Web)” menu + Account Open button vs local agent chat
 
 ---
 
@@ -237,8 +238,8 @@ alwaysApply: true
 ### Sync
 - ✅ Chat + plan writes mirror to Firestore when signed in (desktop push)  
 - ✅ Pull chats from cloud → local history (Account + after sign-in)  
-- 🟨 Firestore **primary** load path (skip VigilDB-first) — not yet; local still default canvas  
-- [ ] Optional local cache warm on launch; invalidate on cloud newer `updatedAt`  
+- ✅ Firestore **primary** load path — signed-in hydrate + History→embed; ChatPanel waits auth; visibility/focus wallet refresh; **periodic cloud pull** (`cloud-refresh-loop`, 45s); offline still VigilDB
+- [ ] Optional local cache warm on launch; invalidate on cloud newer `updatedAt`
 - ✅ Agent coding tools never blocked by chat sync failures (best-effort try/catch; local save first)
 
 > **عربي:** قسم — Plan handoff
@@ -246,19 +247,19 @@ alwaysApply: true
 ### Plan handoff
 - 🟨 Approve on web → same Firestore plan; desktop **pulls on open** (`ensureLocalPlanFromCloud` / hydrate)  
 - 🟨 **Execute** via embed button → `vigil:request-execute` → openPlan (cloud pull) → beginExecute  
-- 🟨 Status mirrored via `vigil:execution-status` + Firestore push; web `PlanLiveStatus` polls API
+- ✅ Status mirrored via `vigil:execution-status` (done/total) + Firestore push; web `PlanLiveStatus` step checklist; mid-run `syncFromManagePlan` throttled cloud push
 
 > **عربي:** قياس الاستهلاك والمحفظة
 
 ### Metering
 - ✅ Desktop `usageEvents` written when signed in  
-- 🟨 Wallet debit / shared balance — desktop debits `users.tokenBalance` on usage; CF idempotency later  
+- ✅ Wallet debit / shared balance — desktop debits `users.tokenBalance`; reads `wallets/{uid}` when present; refresh on focus; CF idempotency later  
 - ✅ Devices registered on login (audit only — unlimited)
 
 > **عربي:** قسم — Billing & identity continuum (see `03-عقد-مشروع-الويب.mdc` §2.3 + §2.4 + §5)
 
 ### Billing & identity continuum (see `03-عقد-مشروع-الويب.mdc` §2.3 + §2.4 + §5)
-- 🟨 User Web **Pricing → packages → checkout → auto activate** (sandbox + **Kashier Test** adapter)  
+- 🟨 User Web **Pricing → packages → checkout → auto activate** (sandbox + **Kashier Test/Live**)  
 - ✅ **Free/trial** starter tokens for a configurable period (signup + seed packages)  
 - 🟨 Desktop EXE **opens Web login** → handoff via embed auth bridge (custom URL scheme later)  
 - 🟨 **Egypt local rails:** Kashier sessions + signed webhook; set `VIGIL_PUBLIC_URL` + dashboard webhook URL  
@@ -306,13 +307,13 @@ alwaysApply: true
 
 ## 10. Acceptance criteria (Phase 1)
 
-- [ ] Online Firestore is where chats/plans live by default  
-- [ ] Local DB not required for the happy path  
+- 🟨 Online Firestore is where chats/plans live by default (desktop signed-in hydrate + push; embed SoR still preferred)  
+- 🟨 Local DB not required for the happy path (signed-in); offline still uses VigilDB cache  
 - [ ] User web sidebar supports New Chat, Search, Recents, Projects, Library, Plans, Usage  
 - [ ] Desktop shows the **same** account history (embed preferred)  
 - 🟨 Execute plan on desktop without re-briefing (plan pull on open; end-to-end smoke still manual)  
 - ✅ No project source in Firestore (client guard + rules)  
-- [ ] Admin can attach a package to a user  
+- ✅ Admin can attach a package to a user (`attachPackageAction` + seed packages / `secure_addon`)  
 
 ---
 
@@ -321,8 +322,8 @@ alwaysApply: true
 ## 11. Open decisions
 
 - ✅ Web app repo: `/Users/user/Documents/Work/Hosam Projects/React/Vigil-AI-Agent-Web` (`hosamkash/Vigil-AI-Agent-Web`)  
-- [ ] Embed tech: Tauri webview vs existing Vigil Browser tab vs iframe to hosted URL  
-- [ ] Auth token bridge desktop↔embed  
+- 🟨 Embed tech: iframe in Vigil Browser tab (`view.cloud`); Tauri child webview parked  
+- ✅ Auth token bridge desktop↔embed (`vigil:auth-handoff` + `/api/session`)  
 - [ ] BYOK vs hosted keys for cloud chat  
 - [ ] Whether “Projects” can later link to a local folder path (name/path hint only)
 
@@ -351,6 +352,15 @@ alwaysApply: true
 ---
 
 - 2026-11-12: Continuum Wave A — auth-restore hydrate, uid+userId+ms, smarter chat merge, web iso(ms), push on close/archive, embed auto-open; EXE deferred by product priority.
+- 2026-11-13: Continuum Wave B — throttled plan step push during Execute; GET plan API + PlanLiveStatus show steps; periodic chat hydrate loop (45s); renameTab/history → cloud; EXE+Crystal stay deferred.
+- 2026-11-13: Continuum Wave C — Firestore-primary hydrate when signed in; ChatPanel auth gate; `vigil://chat` deep link + boot restore; Secure Phase A parallel.
+- 2026-11-13: Vigil Web continuum polish — sticky embed nav; PlanLiveStatus checklist; Support/Secure pages; Admin payments nav; secure_addon seed; desktop chip done/total.
+- 2026-11-13: Kashier Live dual keys + grantPlan wallet/entitlements/subscriptions + embed `vigil:entitlement-updated`. EXE/Crystal remain parked last.
+- 2026-11-13: Desktop Cloud status-bar chip → embed; billing refresh on window focus. SQL remaining parked last with EXE/Crystal.
+- 2026-11-14: `vigil:plan-updated` emit/listen; History copy Firestore-SoR when signed in. Vercel Live still requires dashboard/`env:vercel:push` with `FIREBASE_SERVICE_ACCOUNT_JSON`.
+- 2026-11-14: Settings → Account + StatusBar chip run `env:vercel:push` with **لسه ما اشتغلش** stamp; dedicated Cloud embed tab (does not steal preview).
+- 2026-11-14: **Vercel Live push executed** — linked `vigil-ai-agent-web`, 19 keys production+preview incl. `FIREBASE_SERVICE_ACCOUNT_JSON`; public URL `https://agent.vigilhub.app`; Kashier still **test** (Live keys empty). Desktop `VITE_VIGIL_WEB_URL` → production.
+- 2026-11-14: Signed-in History opens Cloud embed as SoR; wallet refresh on window focus + `wallets/{uid}` fallback.
 
 > **عربي:** حاجات مش في النطاق / خطوط حمراء
 

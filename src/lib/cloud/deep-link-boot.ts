@@ -8,6 +8,40 @@ import { parseVigilDeepLink } from "./deep-link";
 async function applyDeepLink(raw: string): Promise<void> {
   const parsed = parseVigilDeepLink(raw);
   if (!parsed) return;
+
+  if (parsed.kind === "open" && parsed.path) {
+    const { openWorkspaceFromOs } = await import("../open-folder-boot");
+    await openWorkspaceFromOs(parsed.path);
+    return;
+  }
+
+  if (parsed.kind === "chat" && parsed.chatId) {
+    const { useCloudAuthStore } = await import("../../store/cloudAuthStore");
+    const uid = useCloudAuthStore.getState().user?.uid;
+    if (uid) {
+      try {
+        const { hydrateLocalChatsFromCloud } = await import("./cloud-hydrate");
+        await hydrateLocalChatsFromCloud(uid);
+      } catch {
+        /* offline */
+      }
+    }
+    const { useTabsStore } = await import("../../store/tabsStore");
+    await useTabsStore.getState().reloadFromDb();
+    const store = useTabsStore.getState();
+    const open = store.tabs.find((t) => t.id === parsed.chatId);
+    if (open) {
+      store.setActive(parsed.chatId);
+      return;
+    }
+    const inHistory = store.history.find((t) => t.id === parsed.chatId);
+    if (inHistory) {
+      await store.restoreFromHistory(parsed.chatId);
+    }
+    return;
+  }
+
+  if (!parsed.planId) return;
   const { usePlanStore } = await import("../../store/planStore");
   await usePlanStore.getState().openPlan(parsed.planId);
   if (parsed.execute) {

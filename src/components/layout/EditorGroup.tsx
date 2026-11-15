@@ -6,14 +6,19 @@ import { useThemeStore, getTheme } from "../../store/themeStore";
 import { notify, runCommand } from "../../lib/ide-commands";
 import { setMonacoBridge } from "../../lib/monaco-bridge";
 import { configureMonacoTsJs } from "../../lib/monaco-diagnostics";
+import { pathToFileUri } from "../../lib/monaco-file-uri";
+import { isTsJsPath } from "../../lib/editor-diagnostics";
 import { ensureProjectTsModels } from "../../lib/monaco-project-ts";
 import { useEditorStatusStore } from "../../store/editorStatusStore";
 import { ExtensionDetailView } from "../ExtensionDetailView";
 import { BrowserView } from "../BrowserView";
+import { SupportTicketPanel } from "../SupportTicketPanel";
+import { TicketsHubView } from "../TicketsHubView";
 import { destroyExtHostWebview } from "../../lib/embedded-site";
 import { destroyVigilEmbedWebview } from "../../lib/vigil-embed-webview";
 import { GitDiffBar } from "./GitDiffBar";
 import { StartScreen } from "../StartScreen";
+import { EmptyEditorShortcuts } from "../EmptyEditorShortcuts";
 import { useExplorerStore } from "../../store/explorerStore";
 import { useWorkspaceIndexStore } from "../../store/workspaceIndexStore";
 import { useComposerContextStore } from "../../store/composerContextStore";
@@ -63,11 +68,22 @@ export function EditorGroup() {
   const [selectionUi, setSelectionUi] = useState<SelectionChipUi | null>(null);
   const inlineOpen = useInlineEditStore((s) => s.open);
 
+  const tsSeedKey = tabs
+    .filter((t) => t.mode === "file" && isTsJsPath(t.path))
+    .map((t) => t.path)
+    .join("|");
+
   useEffect(() => {
     const monaco = monacoRef.current;
     if (!monaco || !root || !indexReadyAt) return;
-    void ensureProjectTsModels(monaco, root);
-  }, [root, indexReadyAt]);
+    const seedPaths = tabs
+      .filter((t) => t.mode === "file" && isTsJsPath(t.path))
+      .map((t) => t.path);
+    const timer = window.setTimeout(() => {
+      void ensureProjectTsModels(monaco, root, seedPaths);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [root, indexReadyAt, tsSeedKey]);
 
   // Never leave a child webview covering the IDE chrome.
   useEffect(() => {
@@ -426,7 +442,10 @@ export function EditorGroup() {
         </div>
       </div>
 
-      {active && active.mode !== "extension" && active.mode !== "browser" && (
+      {active &&
+        active.mode !== "extension" &&
+        active.mode !== "browser" &&
+        active.mode !== "ticket" && (
         <div className="flex h-6 shrink-0 items-center gap-1 overflow-hidden border-b border-[var(--vigil-border-soft)] px-3 text-[11px] text-[var(--vigil-muted)]">
           {crumbs.map((c, i) => (
             <span key={`${c}-${i}`} className="flex items-center gap-1">
@@ -444,11 +463,7 @@ export function EditorGroup() {
       )}
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {!active && (
-          <div className="flex h-full items-center justify-center text-sm text-[var(--vigil-muted)]">
-            Vigil AI Agent — open a file to start editing
-          </div>
-        )}
+        {!active && <EmptyEditorShortcuts />}
         {active?.mode === "extension" && active.extension && (
           <ExtensionDetailView
             key={active.extension.extensionId}
@@ -462,19 +477,35 @@ export function EditorGroup() {
             initialUrl={active.browser?.url ?? ""}
           />
         )}
+        {active?.mode === "ticket" && (
+          <SupportTicketPanel key={active.ticket?.ticketId} layout="page" />
+        )}
+        {active?.mode === "tickets-hub" && active.ticketsHub && (
+          <TicketsHubView
+            key={`${active.id}-${active.ticketsHub.platformId}`}
+            tabId={active.id}
+            platformId={active.ticketsHub.platformId}
+            pane={active.ticketsHub.pane}
+          />
+        )}
         {active?.mode === "file" && (
           <div ref={editorHostRef} className="relative h-full min-h-0">
             <Editor
               key={`${active.id}-${monacoTheme}-${active.revealLine ?? 0}`}
               height="100%"
-              path={active.path}
+              path={pathToFileUri(active.path)}
               language={active.language}
               theme={monacoTheme}
               value={active.content}
               beforeMount={(monaco) => {
                 monacoRef.current = monaco;
                 configureMonacoTsJs(monaco);
-                if (root) void ensureProjectTsModels(monaco, root);
+                if (root) {
+                  const seedPaths = tabs
+                    .filter((t) => t.mode === "file" && isTsJsPath(t.path))
+                    .map((t) => t.path);
+                  void ensureProjectTsModels(monaco, root, seedPaths);
+                }
               }}
               onMount={onMount}
               onChange={(v) => updateContent(active.id, v ?? "")}

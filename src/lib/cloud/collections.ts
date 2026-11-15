@@ -15,6 +15,8 @@ export const CLOUD_COLLECTIONS = {
   plans: "plans",
   schedules: "schedules",
   devices: "devices",
+  /** Vigil Browser visit metadata only (url/title/visitedAt — never page body/cookies). */
+  browserVisits: "browserVisits",
 } as const;
 
 export type CloudCollectionName =

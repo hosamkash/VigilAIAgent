@@ -69,3 +69,30 @@ export async function runInlineEdit(
     model,
   };
 }
+
+/** Compact line-oriented preview (not a full Myers diff). */
+export function previewUnifiedDiff(
+  before: string,
+  after: string,
+  filePath = "selection",
+): string {
+  if (before === after) return "(no changes)";
+  const a = String(before).split("\n");
+  const b = String(after).split("\n");
+  const lines = [`--- a/${filePath}`, `+++ b/${filePath}`];
+  const max = Math.max(a.length, b.length);
+  let shown = 0;
+  for (let i = 0; i < max && shown < 80; i++) {
+    if (a[i] === b[i]) continue;
+    if (a[i] != null) {
+      lines.push(`-${a[i]}`);
+      shown += 1;
+    }
+    if (b[i] != null) {
+      lines.push(`+${b[i]}`);
+      shown += 1;
+    }
+  }
+  if (max > 80 && shown >= 80) lines.push("…");
+  return lines.join("\n");
+}

@@ -98,7 +98,7 @@ alwaysApply: true
 - [ ] `app_screenshot` (+ chat image like `browser_screenshot`)  
 - 🟨 `app_select` ✅; expand / scroll / right-click / double-click / drag still open  
 - ✅ Screen-map + search (`app_screen_map` / `app_search_ui`)  
-- [ ] Installed-app discovery (Start Menu / Program Files / registry uninstall keys)  
+- 🟨 Installed-app discovery (`app_discover_installed` — Program Files / macOS Applications; Start Menu/registry later)  
 - ✅ Saved **App profiles** (path, args, cwd — login macro later)  
 - ✅ Desktop session chip in StatusBar  
 - [ ] OCR / vision fallback for empty AutomationIds  
@@ -262,7 +262,7 @@ Some products are EXE shell + embedded browser. Dream: same session can `app_*` 
 | ✅ `app_screen_map` | Crawl menus (bounded depth) → path list |
 | `app_record_start` / `app_record_stop` | Capture click/type sequence |
 | `app_replay` | Replay recorded steps with waits |
-| `app_discover_installed` | Search Program Files / Start Menu / uninstall registry for name |
+| ✅ `app_discover_installed` | Search Program Files (Win) / Applications (Mac) by name |
 | `app_ocr_snapshot` | OCR text boxes over screenshot (opt-in) |
 | `app_click_xy` | Coordinate click relative to window (last resort) |
 

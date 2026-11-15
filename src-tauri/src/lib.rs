@@ -6,6 +6,7 @@ mod biometric;
 mod dictate;
 mod git_ops;
 mod github_oauth;
+mod open_folder;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use hmac::{Hmac, Mac};
@@ -27,7 +28,21 @@ use tauri::{Emitter, Manager, State};
 type HmacSha256 = Hmac<Sha256>;
 
 pub(crate) const KEYRING_SERVICE: &str = "com.vigil.agent";
-const SIDECAR_PORT: u16 = 47821;
+const DEFAULT_SIDECAR_PORT: u16 = 47821;
+
+fn sidecar_port() -> u16 {
+    static PORT: OnceLock<u16> = OnceLock::new();
+    *PORT.get_or_init(|| {
+        if let Ok(s) = std::env::var("VIGIL_SIDECAR_PORT") {
+            if let Ok(p) = s.parse::<u16>() {
+                if p != 0 {
+                    return p;
+                }
+            }
+        }
+        DEFAULT_SIDECAR_PORT
+    })
+}
 
 /// Mirror of frontend `DEVICE_AUTH_ENABLED`. Off until account login ships —
 /// no Touch ID / password prompts; settings gate stays open.
@@ -139,7 +154,7 @@ fn validate_provider(provider: &str) -> Result<(), VigilError> {
 
 /// Non-secret metadata path — listing configured providers must NOT touch the OS vault
 /// (avoids a second password/keychain dialog right after Settings unlock).
-fn app_support_dir() -> PathBuf {
+pub(crate) fn app_support_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
@@ -322,6 +337,55 @@ fn delete_ado_pat() -> Result<(), VigilError> {
         write_db_credentials_file(&map)?;
     }
     Ok(())
+}
+
+fn ticket_pat_key(platform: &str) -> String {
+    let p = platform.trim().to_lowercase();
+    if p == "azure-devops" || p == "ado" {
+        ADO_PAT_KEY.to_string()
+    } else {
+        format!("__ticket_pat__{p}")
+    }
+}
+
+#[tauri::command]
+fn save_ticket_pat(platform: String, pat: String) -> Result<(), VigilError> {
+    let token = pat.trim().to_string();
+    if token.is_empty() {
+        return Err(VigilError::Message("Token cannot be empty".into()));
+    }
+    let key = ticket_pat_key(&platform);
+    if key == "__ticket_pat__" {
+        return Err(VigilError::Message("platform required".into()));
+    }
+    let mut map = read_db_credentials_file();
+    map.insert(key, token);
+    write_db_credentials_file(&map)
+}
+
+#[tauri::command]
+fn get_ticket_pat(platform: String) -> Result<String, VigilError> {
+    let key = ticket_pat_key(&platform);
+    let map = read_db_credentials_file();
+    map.get(&key)
+        .cloned()
+        .ok_or_else(|| VigilError::Message("No token saved for this platform".into()))
+}
+
+#[tauri::command]
+fn delete_ticket_pat(platform: String) -> Result<(), VigilError> {
+    let key = ticket_pat_key(&platform);
+    let mut map = read_db_credentials_file();
+    if map.remove(&key).is_some() {
+        write_db_credentials_file(&map)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn has_ticket_pat(platform: String) -> Result<bool, VigilError> {
+    let key = ticket_pat_key(&platform);
+    Ok(read_db_credentials_file().contains_key(&key))
 }
 
 #[tauri::command]
@@ -709,14 +773,15 @@ fn sidecar_accepts_secret(secret_hex: &str, session_id: &str) -> bool {
     mac.update(body.as_bytes());
     let sig = B64.encode(mac.finalize().into_bytes());
 
-    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", SIDECAR_PORT)) else {
+    let port = sidecar_port();
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
         return false;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
 
     let req = format!(
-        "POST / HTTP/1.1\r\nHost: 127.0.0.1:{SIDECAR_PORT}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nx-vigil-hmac: {sig}\r\nConnection: close\r\n\r\n{body}",
+        "POST / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nx-vigil-hmac: {sig}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     if stream.write_all(req.as_bytes()).is_err() {
@@ -779,13 +844,14 @@ fn kill_managed_sidecar(state: &SidecarState) {
             let _ = child.wait();
         }
     }
-    kill_port_holder(SIDECAR_PORT);
+    kill_port_holder(sidecar_port());
     std::thread::sleep(Duration::from_millis(200));
 }
 
 fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError> {
     let launch = launch_secret();
     let root = find_project_root()?;
+    let port = sidecar_port();
     let script_mtime = sidecar_scripts_mtime_ms(&root);
     let cached_mtime = state
         .script_mtime_ms
@@ -793,7 +859,7 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
         .ok()
         .and_then(|g| *g);
 
-    if port_open(SIDECAR_PORT) {
+    if port_open(port) {
         let secret_ok = sidecar_accepts_secret(&state.secret_hex, &launch.session_id);
         let code_unchanged = match (script_mtime, cached_mtime) {
             (Some(now), Some(prev)) => now == prev,
@@ -804,7 +870,7 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
         };
         if secret_ok && code_unchanged {
             return Ok(SpawnResult {
-                port: SIDECAR_PORT,
+                port,
                 session_id: launch.session_id.clone(),
                 already_running: true,
                 pid: None,
@@ -822,9 +888,9 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
         if let Some(child) = guard.as_mut() {
             match child.try_wait() {
                 Ok(None) => {
-                    if wait_for_port(SIDECAR_PORT, 30) {
+                    if wait_for_port(port, 30) {
                         return Ok(SpawnResult {
-                            port: SIDECAR_PORT,
+                            port,
                             session_id: launch.session_id.clone(),
                             already_running: true,
                             pid: Some(child.id()),
@@ -851,7 +917,7 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
         .current_dir(&root)
         .env("VIGIL_LAUNCH_SECRET", &state.secret_hex)
         .env("VIGIL_SESSION_ID", &launch.session_id)
-        .env("VIGIL_SIDECAR_PORT", SIDECAR_PORT.to_string())
+        .env("VIGIL_SIDECAR_PORT", port.to_string())
         .env("VIGIL_CWD", &root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -870,10 +936,10 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
         *guard = Some(child);
     }
 
-    if !wait_for_port(SIDECAR_PORT, 50) {
-        return Err(VigilError::Message(
-            "Sidecar spawned but did not open 127.0.0.1:47821".into(),
-        ));
+    if !wait_for_port(port, 50) {
+        return Err(VigilError::Message(format!(
+            "Sidecar spawned but did not open 127.0.0.1:{port}"
+        )));
     }
 
     if let Ok(mut guard) = state.script_mtime_ms.lock() {
@@ -881,7 +947,7 @@ fn spawn_sidecar_process(state: &SidecarState) -> Result<SpawnResult, VigilError
     }
 
     Ok(SpawnResult {
-        port: SIDECAR_PORT,
+        port,
         session_id: launch.session_id.clone(),
         already_running: false,
         pid: Some(pid),
@@ -895,13 +961,23 @@ fn spawn_sidecar(state: State<'_, SidecarState>) -> Result<SpawnResult, VigilErr
 }
 
 fn workspace_override_path() -> PathBuf {
-    app_support_dir().join("workspace_path.txt")
+    let dir = app_support_dir();
+    match std::env::var("VIGIL_INSTANCE_ID") {
+        Ok(id) if !id.trim().is_empty() => {
+            dir.join(format!("workspace_path.{}.txt", id.trim()))
+        }
+        _ => dir.join("workspace_path.txt"),
+    }
 }
 
 fn read_workspace_override() -> Option<PathBuf> {
     let raw = fs::read_to_string(workspace_override_path()).ok()?;
     let path = PathBuf::from(raw.trim());
     if path.is_dir() { Some(path) } else { None }
+}
+
+pub(crate) fn current_workspace_dir_string() -> Option<String> {
+    read_workspace_override().map(|p| p.to_string_lossy().into_owned())
 }
 
 #[derive(Clone, Serialize)]
@@ -1067,7 +1143,9 @@ fn set_workspace_cwd(path: String) -> Result<String, VigilError> {
     }
     fs::write(&parent, canon.to_string_lossy().as_bytes())
         .map_err(|e| VigilError::Message(e.to_string()))?;
-    Ok(canon.to_string_lossy().into_owned())
+    let path_str = canon.to_string_lossy().into_owned();
+    open_folder::register_this_instance(&path_str, sidecar_port());
+    Ok(path_str)
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1496,7 +1574,15 @@ pub fn run() {
     let launch = launch_secret();
     let secret_hex = hex::encode(launch.secret);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    let builder = if open_folder::is_multi_instance() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            open_folder::handle_second_instance(app, argv);
+        }))
+    };
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_http::init())
@@ -1508,17 +1594,35 @@ pub fn run() {
             child: Mutex::new(None),
             script_mtime_ms: Mutex::new(None),
         })
+        .manage(open_folder::LaunchOpenPath(Mutex::new(
+            open_folder::collect_cli_folder(),
+        )))
         .setup(|app| {
             let state = app.state::<SidecarState>();
             if let Err(e) = spawn_sidecar_process(&state) {
                 eprintln!("[vigil] sidecar auto-spawn: {e}");
+            }
+            if let Some(dir) = open_folder::collect_cli_folder() {
+                open_folder::register_this_instance(&dir, sidecar_port());
+            } else if let Some(dir) = current_workspace_dir_string() {
+                open_folder::register_this_instance(&dir, sidecar_port());
+            }
+            #[cfg(windows)]
+            {
+                let _ = open_folder::install_os_open_menu();
             }
             // Cloud Bridge: vigil://continue?planId=…&execute=1
             use tauri_plugin_deep_link::DeepLinkExt;
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
-                    let _ = handle.emit("vigil://deep-link", url.to_string());
+                    let text = url.to_string();
+                    let _ = handle.emit("vigil://deep-link", text.clone());
+                    if let Some(c) = open_folder::parse_open_candidate(&text) {
+                        if let Some(dir) = open_folder::resolve_workspace_dir(&c) {
+                            open_folder::offer_folder(&handle, dir);
+                        }
+                    }
                 }
             });
             Ok(())
@@ -1534,6 +1638,11 @@ pub fn run() {
             get_ado_pat,
             delete_ado_pat,
             has_ado_pat,
+            save_ticket_pat,
+            get_ticket_pat,
+            delete_ticket_pat,
+            has_ticket_pat,
+            open_folder::open_folder_in_new_window,
             list_configured_providers,
             settings_gate_open,
             lock_settings_gate,
@@ -1576,10 +1685,25 @@ pub fn run() {
             start_live_dictation,
             stop_live_dictation,
             live_dictation_running,
+            open_folder::take_launch_open_path,
+            open_folder::os_open_menu_status,
+            open_folder::install_os_open_menu,
+            open_folder::uninstall_os_open_menu,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Vigil AI Agent")
         .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls, .. } = &event {
+                for url in urls {
+                    let text = url.to_string();
+                    if let Some(c) = open_folder::parse_open_candidate(&text) {
+                        if let Some(dir) = open_folder::resolve_workspace_dir(&c) {
+                            open_folder::offer_folder(app, dir);
+                        }
+                    }
+                }
+            }
             if let tauri::RunEvent::Reopen { .. } = event {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.unminimize();
