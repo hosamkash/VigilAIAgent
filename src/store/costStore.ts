@@ -44,6 +44,25 @@ export const useCostStore = create<CostState>((set, get) => ({
     } catch {
       /* browser preview */
     }
+    // Best-effort Firestore usage event when signed in (Cloud Bridge).
+    try {
+      const { useCloudAuthStore } = await import("./cloudAuthStore");
+      const { recordDesktopUsageEvent } = await import("../lib/cloud/usage");
+      const { getOrCreateLocalDeviceId } = await import("../lib/cloud/devices");
+      const uid = useCloudAuthStore.getState().user?.uid;
+      if (uid) {
+        await recordDesktopUsageEvent({
+          userId: uid,
+          model: usage.model ?? null,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cost: usage.cost,
+          deviceId: getOrCreateLocalDeviceId(),
+        });
+      }
+    } catch {
+      /* offline / not configured */
+    }
   },
   recordEstimate: async (prompt, response, provider, model, sessionId) => {
     const usage = {

@@ -2,6 +2,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useState, type ReactNode, type MouseEvent } from "react";
 import { openAndRevealFile } from "../lib/open-workspace-file";
+import { parsePathWithLine } from "../lib/path-line";
 import { useEditorTabsStore } from "../store/editorTabsStore";
 import { useExplorerStore } from "../store/explorerStore";
 
@@ -45,13 +46,6 @@ function CodeBlock({
   );
 }
 
-function looksLikeWorkspacePath(text: string): boolean {
-  const t = text.trim();
-  if (!t || t.includes("://") || t.includes(" ")) return false;
-  if (!/[./\\]/.test(t)) return false;
-  return /\.[A-Za-z0-9]{1,12}$/.test(t) || t.startsWith("src/") || t.startsWith("./");
-}
-
 function resolveClickPath(raw: string): string {
   const path = raw.trim().replace(/^`+|`+$/g, "");
   const root = useExplorerStore.getState().root?.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -59,6 +53,14 @@ function resolveClickPath(raw: string): string {
   const norm = path.replace(/\\/g, "/");
   if (norm.startsWith("/") || /^[A-Za-z]:\//.test(norm)) return path;
   return `${root}/${norm.replace(/^\.\//, "")}`;
+}
+
+function openParsedPath(raw: string, href?: string) {
+  const parsed = parsePathWithLine(href || raw) || parsePathWithLine(raw);
+  if (!parsed) return;
+  void openAndRevealFile(resolveClickPath(parsed.path), {
+    revealLine: parsed.line,
+  });
 }
 
 export function MarkdownMessage({ content }: { content: string }) {
@@ -71,7 +73,7 @@ export function MarkdownMessage({ content }: { content: string }) {
           code({ className, children, ...props }) {
             const isBlock = Boolean(className) || String(children).includes("\n");
             const text = String(children ?? "").replace(/\n$/, "");
-            if (!isBlock && looksLikeWorkspacePath(text)) {
+            if (!isBlock && parsePathWithLine(text)) {
               return (
                 <button
                   type="button"
@@ -80,7 +82,7 @@ export function MarkdownMessage({ content }: { content: string }) {
                   onClick={(event: MouseEvent) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    void openAndRevealFile(resolveClickPath(text));
+                    openParsedPath(text);
                   }}
                 >
                   {text}
@@ -102,21 +104,25 @@ export function MarkdownMessage({ content }: { content: string }) {
           a({ href, children }) {
             // Never open the system browser for chat file links.
             const label = String(children ?? href ?? "");
-            if (href?.startsWith("vigil-file:") || looksLikeWorkspacePath(label)) {
-              const path = href?.startsWith("vigil-file:")
-                ? decodeURIComponent(
-                    href.replace(/^vigil-file:\/\//, "").replace(/^vigil-file:/, ""),
-                  )
+            if (
+              href?.startsWith("vigil-file:") ||
+              parsePathWithLine(label) ||
+              parsePathWithLine(href || "")
+            ) {
+              const parsed =
+                parsePathWithLine(href || "") || parsePathWithLine(label);
+              const path = parsed
+                ? resolveClickPath(parsed.path)
                 : resolveClickPath(label);
               return (
                 <button
                   type="button"
-                  title={`Open ${path}`}
+                  title={`Open ${path}${parsed?.line ? `:${parsed.line}` : ""}`}
                   className="cursor-pointer border-0 bg-transparent p-0 font-mono text-[12px] text-[var(--vigil-accent)] underline"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    void openAndRevealFile(path);
+                    openParsedPath(label, href);
                   }}
                 >
                   {children}

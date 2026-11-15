@@ -15,6 +15,12 @@ export const DEFAULT_LAYOUT: LayoutSizes = {
   vertical: [70, 30],
 };
 
+/**
+ * Packed composer row: 2 combos + 6×32px buttons + 7×6px gaps + 20px padding.
+ * At this width Send sits against the left controls (no leftover gutter).
+ */
+export const CHAT_PANE_MIN_PX = 402;
+
 export function loadLayoutSizes(): LayoutSizes {
   try {
     const raw = localStorage.getItem(LAYOUT_SIZES_KEY);

@@ -123,6 +123,9 @@ interface ChatState {
   setVoiceGender: (gender: VoiceGender) => void;
   setVoiceId: (voiceId: string) => void;
   setRunning: (running: boolean) => void;
+  queuedAgentPrompt: string | null;
+  queueAgentPrompt: (prompt: string) => void;
+  clearQueuedAgentPrompt: () => void;
   appendMessage: (
     msg: Omit<ChatMessage, "id" | "createdAt"> & { id?: string },
   ) => string;
@@ -181,6 +184,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     writeStorage(CHAT_VOICE_ID_KEY, voiceId);
     set({ voiceId });
   },
+  queuedAgentPrompt: null,
+  queueAgentPrompt: (prompt) =>
+    set({ queuedAgentPrompt: String(prompt || "").trim() || null }),
+  clearQueuedAgentPrompt: () => set({ queuedAgentPrompt: null }),
   setRunning: (isRunning) => set({ isRunning }),
   appendMessage: (msg) => {
     const id = msg.id ?? crypto.randomUUID();

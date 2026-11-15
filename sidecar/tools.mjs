@@ -18,12 +18,62 @@ import {
   app_launch,
   app_attach,
   app_snapshot,
+  app_search_ui,
+  app_screenshot,
+  app_select,
+  app_keys,
+  app_list_windows,
+  app_focus_window,
+  app_screen_map,
   app_click,
   app_type,
   app_read,
   app_wait,
   app_close,
+  app_profiles_list,
+  app_profiles_save,
+  app_discover_installed,
+  getDesktopSession,
 } from "./desktop-app.mjs";
+import {
+  sql_glossary_search,
+  saveGlossaryTerm,
+} from "./sql-glossary.mjs";
+import {
+  sql_connect,
+  sql_disconnect,
+  sql_test_connection,
+  sql_list_databases,
+  sql_list_objects,
+  sql_describe_table,
+  sql_run,
+  sql_use_database,
+  sql_set_mode,
+  sql_get_object_ddl,
+  sql_explain,
+  sql_activity_live,
+  sql_capture_start,
+  sql_capture_stop,
+  sql_capture_list,
+  listDbProfiles,
+  saveDbProfile,
+  getSqlSession,
+} from "./db-connector.mjs";
+import {
+  formatSupportTicketMarkdown,
+  listSupportTicketFiles,
+  normalizeSupportTicket,
+  saveSupportTicketFile,
+} from "./support-ticket.mjs";
+import {
+  addAllowlistHost,
+  listAllowHosts,
+  loadAllowlist,
+  removeAllowlistHost,
+} from "./secure-allowlist.mjs";
+import { runPassiveScan } from "./secure-passive.mjs";
+import { runActiveScan } from "./secure-active.mjs";
+import { explainFinding } from "./secure-education.mjs";
 import {
   applyPlanUpdate,
   formatPlanSummary,
@@ -52,10 +102,62 @@ import {
   formatDelegateSummary,
 } from "./parallel-agents.mjs";
 import { runFocusedSubagent } from "./subagent.mjs";
+import {
+  isDelegateCancelled,
+  resetDelegateCancel,
+} from "./delegate-runtime.mjs";
 
 function unwrapApp(result) {
-  if (!result?.ok) throw new Error(result?.error || "desktop app tool failed");
+  if (!result?.ok) {
+    let msg = result?.error || "desktop app tool failed";
+    if (Array.isArray(result?.candidates) && result.candidates.length) {
+      msg +=
+        "\nCandidates:\n" +
+        result.candidates
+          .map(
+            (c) =>
+              `- pid=${c.pid} ${c.processName || ""}${c.title ? ` “${c.title}”` : ""}`,
+          )
+          .join("\n");
+    }
+    throw new Error(msg);
+  }
   return result.output || "ok";
+}
+
+function emitDesktopSession(fire) {
+  if (typeof fire !== "function") return;
+  const s = getDesktopSession();
+  fire({
+    type: "tool",
+    toolName: "app_session",
+    attached: !!s.attached,
+    pid: s.pid,
+    title: s.title,
+    path: s.path,
+  });
+}
+
+function unwrapSql(result) {
+  if (!result?.ok) {
+    throw new Error(result?.error || "SQL tool failed");
+  }
+  return result.output || "ok";
+}
+
+function emitSqlSession(fire) {
+  if (typeof fire !== "function") return;
+  const s = getSqlSession();
+  fire({
+    type: "tool",
+    toolName: "sql_session",
+    connected: !!s.connected,
+    engine: s.engine,
+    label: s.label,
+    database: s.database,
+    readOnly: s.readOnly !== false,
+    profileId: s.profileId,
+  });
 }
 
 export async function list_files(dirPath = ".", cwd = process.cwd()) {
@@ -212,6 +314,10 @@ export async function search_codebase(
   if (!q) {
     return { ok: false, output: "", error: "search_codebase requires query" };
   }
+  const timeoutMs = Math.max(
+    2_000,
+    Math.min(30_000, Number(process.env.VIGIL_SEARCH_TIMEOUT_MS) || 12_000),
+  );
 
   // 0) Deep local index (BM25 + vectors + import graph) — sync/build if needed.
   let indexSection = "";
@@ -252,10 +358,19 @@ export async function search_codebase(
       { cwd, env: process.env },
     );
     let stdout = "";
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
+      resolve([]);
+    }, timeoutMs);
     child.stdout.on("data", (c) => {
       stdout += c.toString();
     });
     child.on("close", () => {
+      clearTimeout(timer);
       const needle = q.toLowerCase();
       const ranked = stdout
         .split("\n")
@@ -277,7 +392,10 @@ export async function search_codebase(
         .slice(0, 20);
       resolve(ranked);
     });
-    child.on("error", () => resolve([]));
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve([]);
+    });
   });
 
   // 2) Content matches (symbol / call sites).
@@ -852,6 +970,14 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       execute: async (input = {}) => {
         const result = await find_definition(input.symbol || "", toolCwd(input));
         if (!result.ok) throw new Error(result.error || "find_definition failed");
+        if (Array.isArray(result.locations) && result.locations.length) {
+          fire({
+            type: "tool",
+            toolName: "find_definition",
+            hook: "end",
+            locations: result.locations,
+          });
+        }
         return result.output;
       },
     },
@@ -968,7 +1094,13 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
           delegateJobs: jobs.map((j) => ({ ...j })),
         });
 
+        resetDelegateCancel();
         await mapPool(jobs, concurrency, async (job) => {
+          if (isDelegateCancelled()) {
+            job.status = "cancelled";
+            job.error = "cancelled";
+            return;
+          }
           job.status = "running";
           fire({
             type: "tool",
@@ -1002,7 +1134,11 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
             autoRun: sub.autoRun !== false,
             emit: fire,
           });
-          if (result.ok) {
+          if (isDelegateCancelled() || result.error === "cancelled") {
+            job.status = "cancelled";
+            job.error = "cancelled";
+            job.result = result.text || "";
+          } else if (result.ok) {
             job.status = "completed";
             job.result = result.text;
           } else {
@@ -1320,8 +1456,8 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       name: "app_launch",
       description:
         "Windows only. Launch a WinForms / DevExpress desktop .exe for UI testing. " +
-        "Pass path to the exe, or 'project' to auto-detect under bin/Debug|Release. " +
-        "Then use app_snapshot → app_click / app_type / app_read.",
+        "Pass path to the exe, 'project' to auto-detect under bin/Debug|Release, or profile id. " +
+        "Then use app_search_ui / app_snapshot → app_click / app_type / app_read / app_screenshot.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1329,17 +1465,26 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
             type: "string",
             description: "Path to .exe, or 'project' to auto-detect",
           },
+          profile: {
+            type: "string",
+            description: "Saved profile id/name from app_profiles_list",
+          },
           args: { type: "string", description: "Optional process arguments" },
+          cwd: { type: "string", description: "Optional working directory" },
         },
-        required: ["path"],
       },
       executionMode: "sequential",
-      execute: async (input = {}) => unwrapApp(await app_launch(input, cwd)),
+      execute: async (input = {}) => {
+        const out = unwrapApp(await app_launch(input, cwd));
+        emitDesktopSession(fire);
+        return out;
+      },
     },
     {
       name: "app_attach",
       description:
-        "Windows only. Attach to an already-running desktop app by pid or process/window name.",
+        "Windows only. Attach to an already-running desktop app by pid or process/window name. " +
+        "If several match, returns candidates — retry with pid.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1348,7 +1493,11 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
         },
       },
       executionMode: "sequential",
-      execute: async (input = {}) => unwrapApp(await app_attach(input)),
+      execute: async (input = {}) => {
+        const out = unwrapApp(await app_attach(input));
+        emitDesktopSession(fire);
+        return out;
+      },
     },
     {
       name: "app_snapshot",
@@ -1363,8 +1512,103 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       execute: async (input = {}) => unwrapApp(await app_snapshot(input)),
     },
     {
+      name: "app_search_ui",
+      description:
+        "Windows only. Fuzzy search current window UI (Arabic/English) for a screen/feature. " +
+        "Prefer this before random clicks when the user asks «فين الشاشة؟» / «فيها Excel؟». " +
+        "Returns matching refs [e1]… for app_click / app_read.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Arabic or English keyword" },
+          max: { type: "number" },
+        },
+        required: ["query"],
+      },
+      executionMode: "parallel",
+      execute: async (input) => unwrapApp(await app_search_ui(input)),
+    },
+    {
+      name: "app_screenshot",
+      description:
+        "Windows only. PNG screenshot of the main desktop app window — shown inline in chat.",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "parallel",
+      execute: async (input = {}) => {
+        const result = await app_screenshot(input, fire);
+        emitDesktopSession(fire);
+        return unwrapApp(result);
+      },
+    },
+    {
+      name: "app_screen_map",
+      description:
+        "Windows only. Bounded top-menu crawl → menu path list (e.g. المخازن → تقارير). " +
+        "Use when app_search_ui misses and the user asks where a screen lives. Skips Exit/خروج.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          maxMenus: { type: "number" },
+          maxItems: { type: "number" },
+          timeoutMs: { type: "number" },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => unwrapApp(await app_screen_map(input)),
+    },
+    {
+      name: "app_list_windows",
+      description: "Windows only. List top-level windows for the attached process.",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "parallel",
+      execute: async () => unwrapApp(await app_list_windows()),
+    },
+    {
+      name: "app_focus_window",
+      description: "Windows only. Focus a top-level window by index (from app_list_windows) or title substring.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          index: { type: "number" },
+          title: { type: "string" },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => unwrapApp(await app_focus_window(input)),
+    },
+    {
+      name: "app_select",
+      description:
+        "Windows only. Select a combo/list value by ref + value text (DevExpress-friendly).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ref: { type: "string" },
+          value: { type: "string" },
+        },
+        required: ["ref", "value"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapApp(await app_select(input)),
+    },
+    {
+      name: "app_keys",
+      description:
+        "Windows only. Send hotkeys to the focused desktop app (e.g. Ctrl+S, Alt+F, F5, Enter).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          keys: { type: "string", description: "Chord like Ctrl+S or Enter" },
+        },
+        required: ["keys"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapApp(await app_keys(input)),
+    },
+    {
       name: "app_click",
-      description: "Windows only. Click a desktop UI element by ref from app_snapshot.",
+      description:
+        "Windows only. Click a desktop UI element by ref from app_snapshot or app_search_ui.",
       inputSchema: {
         type: "object",
         properties: { ref: { type: "string" } },
@@ -1419,11 +1663,725 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       execute: async (input = {}) => unwrapApp(await app_wait(input)),
     },
     {
+      name: "app_profiles_list",
+      description:
+        "Windows only. List saved desktop app profiles from .vigil/app-profiles.json.",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "parallel",
+      execute: async () => unwrapApp(await app_profiles_list(cwd)),
+    },
+    {
+      name: "app_profiles_save",
+      description:
+        "Windows only. Save a named launch profile (path, optional args/cwd) under .vigil/app-profiles.json.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          name: { type: "string" },
+          path: { type: "string" },
+          args: { type: "string" },
+          cwd: { type: "string" },
+        },
+        required: ["name", "path"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapApp(await app_profiles_save(input, cwd)),
+    },
+    {
+      name: "app_discover_installed",
+      description:
+        "Search installed desktop apps (macOS /Applications, Windows Program Files). Returns name + path to launch or save as a profile.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Name substring" },
+          max: { type: "number" },
+        },
+      },
+      executionMode: "parallel",
+      execute: async (input = {}) =>
+        unwrapApp(await app_discover_installed(input)),
+    },
+    {
       name: "app_close",
       description: "Windows only. Close the attached/launched desktop app and stop the UI driver.",
       inputSchema: { type: "object", properties: {} },
       executionMode: "sequential",
-      execute: async () => unwrapApp(await app_close()),
+      execute: async () => {
+        const out = unwrapApp(await app_close());
+        emitDesktopSession(fire);
+        return out;
+      },
+    },
+    // --- Support / DB Copilot (SQL Server + PostgreSQL) ---
+    {
+      name: "sql_profiles_list",
+      description:
+        "List saved DB connection profiles from .vigil/db-profiles.json (no passwords).",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        const list = await listDbProfiles(cwd);
+        if (!list.length) return "No DB profiles yet. Use sql_profiles_save.";
+        return list
+          .map(
+            (p) =>
+              `- ${p.id}: ${p.name} (${p.engine}) ${p.host}:${p.port || "?"} db=${p.database || "(default)"} user=${p.username}`,
+          )
+          .join("\n");
+      },
+    },
+    {
+      name: "sql_profiles_save",
+      description:
+        "Save a DB profile (labels only — never store password in the JSON file).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          name: { type: "string" },
+          engine: { type: "string", description: "mssql | postgres" },
+          host: { type: "string" },
+          port: { type: "number" },
+          instance: { type: "string" },
+          database: { type: "string" },
+          username: { type: "string" },
+          encrypt: { type: "boolean" },
+          trustServerCertificate: { type: "boolean" },
+          sslMode: { type: "string" },
+        },
+        required: ["name", "engine", "host", "username"],
+      },
+      execute: async (input) => unwrapSql(await saveDbProfile(cwd, input)),
+    },
+    {
+      name: "sql_connect",
+      description:
+        "Connect to SQL Server (mssql) or PostgreSQL. Prefer profileId from sql_profiles_list. Password via arg (from OS keychain/UI) or VIGIL_SQL_PASSWORD. Default read-only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          profileId: { type: "string" },
+          engine: { type: "string" },
+          host: { type: "string" },
+          port: { type: "number" },
+          database: { type: "string" },
+          username: { type: "string" },
+          password: { type: "string" },
+          instance: { type: "string" },
+          encrypt: { type: "boolean" },
+          trustServerCertificate: { type: "boolean" },
+          sslMode: { type: "string" },
+          mode: { type: "string", description: "read (default) | write" },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const out = unwrapSql(await sql_connect(input, cwd));
+        emitSqlSession(fire);
+        return out;
+      },
+    },
+    {
+      name: "sql_test_connection",
+      description: "Test DB credentials then disconnect (no lasting session).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          profileId: { type: "string" },
+          engine: { type: "string" },
+          host: { type: "string" },
+          port: { type: "number" },
+          database: { type: "string" },
+          username: { type: "string" },
+          password: { type: "string" },
+          trustServerCertificate: { type: "boolean" },
+          sslMode: { type: "string" },
+        },
+      },
+      execute: async (input) => unwrapSql(await sql_test_connection(input, cwd)),
+    },
+    {
+      name: "sql_disconnect",
+      description: "Close the active SQL connection pool.",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        const out = unwrapSql(await sql_disconnect());
+        emitSqlSession(fire);
+        return out;
+      },
+    },
+    {
+      name: "sql_list_databases",
+      description: "List databases on the connected server.",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => unwrapSql(await sql_list_databases()),
+    },
+    {
+      name: "sql_list_objects",
+      description:
+        "List tables/views/procedures/functions (optional schema filter). kind=all includes routines.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          schema: { type: "string" },
+          kind: {
+            type: "string",
+            description: "table | view | all | procedure | function | routine",
+          },
+        },
+      },
+      execute: async (input) => unwrapSql(await sql_list_objects(input)),
+    },
+    {
+      name: "sql_describe_table",
+      description: "Describe columns for a table (schema.table or table).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          table: { type: "string" },
+          schema: { type: "string" },
+        },
+        required: ["table"],
+      },
+      execute: async (input) => unwrapSql(await sql_describe_table(input)),
+    },
+    {
+      name: "sql_get_object_ddl",
+      description:
+        "Get DDL for a table/view/proc/function (script or synthesized CREATE TABLE).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "schema.name or name" },
+          name: { type: "string" },
+          schema: { type: "string" },
+          kind: {
+            type: "string",
+            description: "auto | table | view | procedure | function",
+          },
+        },
+      },
+      execute: async (input) => unwrapSql(await sql_get_object_ddl(input)),
+    },
+    {
+      name: "sql_use_database",
+      description:
+        "Switch the active database on the current Support session (reconnects with same credentials).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          database: { type: "string" },
+        },
+        required: ["database"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const out = unwrapSql(await sql_use_database(input));
+        emitSqlSession(fire);
+        return out;
+      },
+    },
+    {
+      name: "sql_set_mode",
+      description:
+        "Toggle session read vs write. Write requires confirm:true. Prefer read-only for support.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { type: "string", description: "read | write" },
+          confirm: {
+            type: "boolean",
+            description: "Must be true to enable write mode",
+          },
+        },
+        required: ["mode"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => {
+        const out = unwrapSql(await sql_set_mode(input));
+        emitSqlSession(fire);
+        return out;
+      },
+    },
+    {
+      name: "sql_run",
+      description:
+        "Run SQL on the connected DB. Default session is read-only (SELECT/WITH/EXPLAIN). Results capped.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sql: { type: "string" },
+          maxRows: { type: "number" },
+        },
+        required: ["sql"],
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapSql(await sql_run(input)),
+    },
+    {
+      name: "sql_explain",
+      description:
+        "Explain plan for a SELECT/WITH. Postgres: optional analyze+confirmAnalyze. SQL Server: estimated SHOWPLAN_TEXT.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sql: { type: "string" },
+          analyze: { type: "boolean" },
+          confirmAnalyze: { type: "boolean" },
+        },
+        required: ["sql"],
+      },
+      execute: async (input) => unwrapSql(await sql_explain(input)),
+    },
+    {
+      name: "sql_glossary_search",
+      description:
+        "Search the local Support glossary (.vigil/glossary.json) for Arabic/English business terms mapped to table.column.",
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+      executionMode: "parallel",
+      execute: async (input) =>
+        unwrapSql(await sql_glossary_search(cwd, input.query)),
+    },
+    {
+      name: "sql_glossary_save",
+      description:
+        "Add a glossary term (ar/en → table.column) under .vigil/glossary.json. No secrets.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ar: { type: "string" },
+          en: { type: "string" },
+          table: { type: "string" },
+          column: { type: "string" },
+          note: { type: "string" },
+        },
+      },
+      execute: async (input) => unwrapSql(await saveGlossaryTerm(cwd, input)),
+    },
+    {
+      name: "sql_activity_live",
+      description:
+        "Vigil Profiler: snapshot running SQL right now (SQL Server DMVs / Postgres pg_stat_activity). " +
+        "Needs VIEW SERVER STATE on SQL Server. Optional filters: login, host, app, database.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          login: { type: "string" },
+          host: { type: "string" },
+          app: { type: "string" },
+          database: { type: "string" },
+          excludeVigil: { type: "boolean" },
+        },
+      },
+      execute: async (input) => unwrapSql(await sql_activity_live(input)),
+    },
+    {
+      name: "sql_capture_start",
+      description:
+        "Start a short Activity Capture window (poll live queries). Then user opens a report / clicks in EXE; call sql_capture_stop.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          maxMs: { type: "number", description: "Default 15000, max 60000" },
+          maxEvents: { type: "number" },
+          intervalMs: { type: "number" },
+          login: { type: "string" },
+          host: { type: "string" },
+          app: { type: "string" },
+          database: { type: "string" },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input) => unwrapSql(await sql_capture_start(input)),
+    },
+    {
+      name: "sql_capture_stop",
+      description: "Stop Activity Capture and return collected SQL batches.",
+      inputSchema: { type: "object", properties: {} },
+      executionMode: "sequential",
+      execute: async () => unwrapSql(await sql_capture_stop()),
+    },
+    {
+      name: "sql_capture_list",
+      description: "Show current capture buffer / status without stopping.",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => unwrapSql(await sql_capture_list()),
+    },
+    // --- Support Ticket Composer ---
+    {
+      name: "draft_support_ticket",
+      description:
+        "Draft or update a structured Support ticket for developers (Bug/Task/User Story/Spike). " +
+        "Fill from the current investigation (chat + SQL evidence). Saves under .vigil/tickets/ and " +
+        "opens the Ticket panel. Prefer Arabic or English to match the user. Never include passwords.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Existing ticket id to update" },
+          title: { type: "string" },
+          type: {
+            type: "string",
+            description: "Bug | Task | User Story | Spike",
+          },
+          summary: { type: "string" },
+          businessImpact: { type: "string" },
+          environment: { type: "string" },
+          stepsToReproduce: {
+            type: "array",
+            items: { type: "string" },
+          },
+          expected: { type: "string" },
+          actual: { type: "string" },
+          evidence: {
+            type: "array",
+            items: { type: "string" },
+            description: "Sanitized queries, object names, errors (no secrets)",
+          },
+          suspectedArea: { type: "string" },
+          acceptanceCriteria: {
+            type: "array",
+            items: { type: "string" },
+          },
+          outOfScope: { type: "string" },
+          priority: { type: "string", description: "P0 | P1 | P2 | P3" },
+          severity: {
+            type: "string",
+            description: "Sev1 | Sev2 | Sev3 | Sev4",
+          },
+          connectionLabel: {
+            type: "string",
+            description: "DB profile nickname only",
+          },
+          status: {
+            type: "string",
+            description: "draft | ready (default draft)",
+          },
+        },
+        required: ["title", "summary"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        const session = getSqlSession();
+        const ticket = normalizeSupportTicket({
+          ...input,
+          connectionLabel:
+            input.connectionLabel ||
+            session?.label ||
+            session?.profileId ||
+            undefined,
+          environment:
+            input.environment ||
+            (session?.connected
+              ? `${session.engine || "db"} · ${session.database || "(default db)"} · readOnly=${session.readOnly !== false}`
+              : undefined),
+        });
+        const { ticket: saved, path: filePath } = await saveSupportTicketFile(
+          cwd,
+          ticket,
+        );
+        fire({
+          type: "tool",
+          toolName: "draft_support_ticket",
+          hook: "update",
+          supportTicket: saved,
+          path: filePath,
+        });
+        const md = formatSupportTicketMarkdown(saved);
+        return (
+          `Support ticket saved (${saved.id}) → ${path.relative(cwd, filePath)}\n\n` +
+          md
+        );
+      },
+    },
+    {
+      name: "list_support_tickets",
+      description:
+        "List local Support ticket drafts under .vigil/tickets/ (id, title, type, status).",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        const list = await listSupportTicketFiles(cwd);
+        if (!list.length) {
+          return "No support tickets yet. Use draft_support_ticket.";
+        }
+        return list
+          .map(
+            (t) =>
+              `- ${t.id}: [${t.status}] ${t.type} — ${t.title}${t.priority ? ` (${t.priority})` : ""}`,
+          )
+          .join("\n");
+      },
+    },
+    // --- Vigil Secure (Phase A: allowlist + passive) ---
+    {
+      name: "secure_allowlist_list",
+      description:
+        "List authorized Secure scan hosts for this workspace (.vigil/secure-allowlist.json). " +
+        "localhost / 127.0.0.1 are always allowed without listing.",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        const data = await loadAllowlist(cwd);
+        if (!data.hosts.length) {
+          return "Allowlist empty. localhost/127.0.0.1 always OK. Use secure_allowlist_add for remote hosts (confirm=true).";
+        }
+        return data.hosts
+          .map(
+            (h) =>
+              `- ${h.host}${h.ownership ? ` (${h.ownership})` : ""}${h.note ? ` — ${h.note}` : ""}`,
+          )
+          .join("\n");
+      },
+    },
+    {
+      name: "secure_allowlist_add",
+      description:
+        "Add a host to the Secure allowlist. Remote hosts REQUIRE confirm=true " +
+        "(user ownership confirmation). Never add arbitrary third-party sites.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          host: { type: "string" },
+          confirm: {
+            type: "boolean",
+            description: "Required true for non-localhost hosts",
+          },
+          note: { type: "string" },
+          ownership: { type: "string" },
+        },
+        required: ["host"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        const saved = await addAllowlistHost(cwd, input);
+        fire({
+          type: "tool",
+          toolName: "secure_allowlist_add",
+          hook: "update",
+          secureAllowlist: saved,
+        });
+        return `Allowlist updated (${saved.hosts.length} host(s)).`;
+      },
+    },
+    {
+      name: "secure_allowlist_remove",
+      description: "Remove a host from the Secure allowlist.",
+      inputSchema: {
+        type: "object",
+        properties: { host: { type: "string" } },
+        required: ["host"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        const saved = await removeAllowlistHost(cwd, input.host);
+        fire({
+          type: "tool",
+          toolName: "secure_allowlist_remove",
+          hook: "update",
+          secureAllowlist: saved,
+        });
+        return `Removed ${String(input.host || "")}. ${saved.hosts.length} host(s) remain.`;
+      },
+    },
+    {
+      name: "secure_scan_passive",
+      description:
+        "Run Vigil Secure Quick/passive pack on an AUTHORIZED target only " +
+        "(localhost, project preview, or allowlisted host). Checks security headers, " +
+        "cookie flags, HTTPS hints, secret heuristics in workspace, and npm audit. " +
+        "Hard-fails unauthorized URLs. Prefer remediation (fix) over weaponization. " +
+        "Explain findings simply in the user's language (AR/EN education included).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "Target URL (default: project preview / localhost)",
+          },
+        },
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        let url = String(input.url || "").trim();
+        let previewUrl = null;
+        try {
+          previewUrl = await detectProjectUrl(cwd);
+        } catch {
+          previewUrl = null;
+        }
+        if (!url) url = previewUrl || "http://127.0.0.1:5173";
+        const allowHosts = await listAllowHosts(cwd);
+        const result = await runPassiveScan({
+          url,
+          workspaceRoot: cwd,
+          allowHosts,
+          previewUrl,
+        });
+        fire({
+          type: "tool",
+          toolName: "secure_scan_passive",
+          hook: "update",
+          secureScan: result,
+        });
+        if (!result.ok) {
+          throw new Error(result.error || "Secure scan blocked");
+        }
+        const lines = [
+          `Vigil Secure passive scan → ${result.target}`,
+          `Findings: ${result.summary.total} (critical=${result.summary.critical} high=${result.summary.high} medium=${result.summary.medium} low=${result.summary.low} info=${result.summary.info})`,
+          "",
+        ];
+        for (const f of result.findings.slice(0, 40)) {
+          lines.push(
+            `### [${f.severity}] ${f.title}`,
+            f.detail,
+            f.path ? `Path: ${f.path}` : null,
+            f.evidence ? `Evidence: ${f.evidence}` : null,
+            `Fix hint: ${f.education?.fixHint || ""}`,
+            `AR: ${f.educationAr?.what || ""}`,
+            "",
+          );
+        }
+        return lines.filter((x) => x != null).join("\n");
+      },
+    },
+    {
+      name: "secure_scan_active",
+      description:
+        "Run Vigil Secure active (Standard) pack on an AUTHORIZED target. " +
+        "REQUIRES confirm:true after the user explicitly starts Active scan. " +
+        "Safe curated probes only: sensitive paths, directory listing, reflected " +
+        "XSS marker, CSRF form heuristics, admin-path reachability, verbose errors. " +
+        "No DoS, no credential stuffing, no exploit kits. Hard-fails unauthorized URLs.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string" },
+          confirm: {
+            type: "boolean",
+            description: "Must be true — explicit user Start Active",
+          },
+        },
+        required: ["confirm"],
+      },
+      executionMode: "sequential",
+      execute: async (input = {}) => {
+        let url = String(input.url || "").trim();
+        let previewUrl = null;
+        try {
+          previewUrl = await detectProjectUrl(cwd);
+        } catch {
+          previewUrl = null;
+        }
+        if (!url) url = previewUrl || "http://127.0.0.1:5173";
+        const allowHosts = await listAllowHosts(cwd);
+        const result = await runActiveScan({
+          url,
+          allowHosts,
+          previewUrl,
+          confirm: input.confirm === true,
+        });
+        fire({
+          type: "tool",
+          toolName: "secure_scan_active",
+          hook: "update",
+          secureScan: result,
+        });
+        if (!result.ok) {
+          throw new Error(result.error || "Active Secure scan blocked");
+        }
+        const lines = [
+          `Vigil Secure ACTIVE scan → ${result.target}`,
+          `Findings: ${result.summary.total} (critical=${result.summary.critical} high=${result.summary.high} medium=${result.summary.medium} low=${result.summary.low} info=${result.summary.info})`,
+          "",
+        ];
+        for (const f of result.findings.slice(0, 40)) {
+          lines.push(
+            `### [${f.severity}] ${f.title}`,
+            f.detail,
+            f.path ? `Path: ${f.path}` : null,
+            f.evidence ? `Evidence: ${f.evidence}` : null,
+            `Fix hint: ${f.education?.fixHint || ""}`,
+            `AR: ${f.educationAr?.what || ""}`,
+            "",
+          );
+        }
+        return lines.filter((x) => x != null).join("\n");
+      },
+    },
+    {
+      name: "secure_report_export",
+      description:
+        "Export a Vigil Secure markdown report for an AUTHORIZED target " +
+        "(re-runs Quick/passive pack). Disclaimer: not a certified pentest. " +
+        "Writes .vigil/secure-reports/report-*.md locally — never uploads the repo.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string" },
+          lang: { type: "string", description: "en | ar" },
+        },
+      },
+      execute: async (input = {}) => {
+        let url = String(input.url || "").trim();
+        let previewUrl = null;
+        try {
+          previewUrl = await detectProjectUrl(cwd);
+        } catch {
+          previewUrl = null;
+        }
+        if (!url) url = previewUrl || "http://127.0.0.1:5173";
+        const allowHosts = await listAllowHosts(cwd);
+        const result = await runPassiveScan({
+          url,
+          workspaceRoot: cwd,
+          allowHosts,
+          previewUrl,
+        });
+        if (!result.ok) throw new Error(result.error || "Secure report blocked");
+        const ar = String(input.lang || "en").startsWith("ar");
+        const lines = [
+          ar ? "# تقرير Vigil Secure" : "# Vigil Secure Report",
+          "",
+          ar
+            ? "مساعد دفاعي على هدف مصرّح — ليس اختبار اختراق معتمد."
+            : "Defensive assistant on an authorized target — not a certified pentest.",
+          "",
+          `Target: ${result.target}`,
+          `Findings: ${result.summary.total}`,
+          "",
+        ];
+        for (const f of result.findings) {
+          lines.push(`### [${f.severity}] ${f.title}`, f.detail, "");
+        }
+        const dir = path.join(cwd, ".vigil", "secure-reports");
+        await fs.mkdir(dir, { recursive: true });
+        const file = path.join(dir, `report-${Date.now()}.md`);
+        await fs.writeFile(file, lines.join("\n"), "utf8");
+        return `Wrote Secure report: ${file}`;
+      },
+    },
+    {
+      name: "secure_explain",
+      description:
+        "Plain Arabic/English explanation for a Secure finding category " +
+        "(xss/csp/cookies/deps/secrets…) — educational, not an exploit guide.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          category: { type: "string" },
+          lang: { type: "string", description: "en | ar" },
+        },
+        required: ["category"],
+      },
+      execute: async (input = {}) => {
+        const lang = String(input.lang || "en").startsWith("ar") ? "ar" : "en";
+        const e = explainFinding(String(input.category), lang);
+        return `${e.title}\n\nWhat: ${e.what}\nWhy: ${e.why}\nFix: ${e.fixHint}`;
+      },
     },
   ];
 
@@ -1444,11 +2402,47 @@ export function buildVigilExtraTools(cwd, onWrite, remember, emit, options = {})
       "app_launch",
       "app_attach",
       "app_snapshot",
+      "app_search_ui",
+      "app_screenshot",
+      "app_screen_map",
+      "app_list_windows",
+      "app_focus_window",
+      "app_select",
+      "app_keys",
       "app_click",
       "app_type",
       "app_read",
       "app_wait",
+      "app_profiles_list",
+      "app_profiles_save",
+      "app_discover_installed",
       "app_close",
+      "sql_connect",
+      "sql_disconnect",
+      "sql_test_connection",
+      "sql_profiles_list",
+      "sql_profiles_save",
+      "sql_list_databases",
+      "sql_list_objects",
+      "sql_describe_table",
+      "sql_get_object_ddl",
+      "sql_use_database",
+      "sql_set_mode",
+      "sql_run",
+      "sql_explain",
+      "sql_glossary_search",
+      "sql_glossary_save",
+      "sql_activity_live",
+      "sql_capture_start",
+      "sql_capture_stop",
+      "sql_capture_list",
+      "draft_support_ticket",
+      "list_support_tickets",
+      "secure_allowlist_add",
+      "secure_allowlist_remove",
+      "secure_scan_passive",
+      "secure_scan_active",
+      "secure_report_export",
       "create_pull_request",
     ]);
     return tools.filter((t) => !blocked.has(t.name));

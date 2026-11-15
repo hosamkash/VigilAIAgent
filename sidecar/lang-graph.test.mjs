@@ -42,6 +42,8 @@ describe("lang-graph", () => {
     const result = await find_definition("verifyToken", tmp);
     expect(result.ok).toBe(true);
     expect(result.output).toContain("verifyToken");
-    expect(result.output).toContain("auth.ts");
+    expect(result.output).toContain("`");
+    expect(result.output).toMatch(/auth\.ts:\d+/);
+    expect(result.locations?.[0]?.path).toMatch(/auth\.ts/);
   });
 });

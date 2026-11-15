@@ -361,6 +361,20 @@ export async function browser_press(input = {}) {
   return { ok: true, output: `Pressed ${key}\n\n${snap}`, url: page.url() };
 }
 
+/** Screenshot only if a page is already open — never launch a browser. */
+export async function tryScreenshotOpenPage() {
+  if (!page) return null;
+  try {
+    const buffer = await page.screenshot({ type: "png", fullPage: false });
+    return {
+      url: page.url(),
+      imageBase64: buffer.toString("base64"),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function browser_screenshot(input = {}, emit) {
   const p = await ensurePage();
   const fullPage = input.fullPage === true;

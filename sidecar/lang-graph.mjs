@@ -123,8 +123,10 @@ export async function find_definition(symbol, cwd = process.cwd()) {
         .slice(2, 8)
         .join("\n")
         .slice(0, 350);
+      const loc = `${d.path}:${d.startLine}`;
       return [
-        `### ${d.title} (${d.kind}) · ${d.path}:${d.startLine}`,
+        `### ${d.title} (${d.kind})`,
+        `Open at line: \`${loc}\``,
         "```",
         preview,
         "```",
@@ -137,11 +139,20 @@ export async function find_definition(symbol, cwd = process.cwd()) {
     lines.push(
       [...neighbors]
         .slice(0, 16)
-        .map((p) => `- ${p}`)
+        .map((p) => `- \`${p}\``)
         .join("\n"),
     );
   }
-  return { ok: true, output: lines.join("\n"), count: defs.length };
+  return {
+    ok: true,
+    output: lines.join("\n"),
+    count: defs.length,
+    locations: defs.slice(0, 12).map((d) => ({
+      path: d.path,
+      line: d.startLine,
+      title: d.title,
+    })),
+  };
 }
 
 /**

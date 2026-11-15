@@ -53,9 +53,14 @@ import type { ChangeSort, ChangeView } from "../../../lib/scm-view";
 import { buildRemotePageUrl } from "../../../lib/git-remote-web";
 import {
   createPullRequest,
+  buildCiFixPrompt,
+  draftPrBodyFromPlan,
   fetchCiStatus,
   formatCiStatusForAgent,
+  type CiStatusSummary,
 } from "../../../lib/git-pr";
+import { usePlanStore } from "../../../store/planStore";
+import { useChatStore } from "../../../store/chatStore";
 import { openTerminalUrl } from "../../../lib/terminal-links";
 import type { ScmPromptRequest } from "./ScmMenu";
 
@@ -77,6 +82,7 @@ export async function runScmCommand(
     setSortBy: (value: ChangeSort) => void;
     ask: (request: ScmPromptRequest) => Promise<string | null>;
     attempt: Attempt;
+    onCiSummary?: (summary: CiStatusSummary) => void;
   },
 ): Promise<void> {
   if (
@@ -494,8 +500,26 @@ export async function runScmCommand(
     case "checkCiStatus": {
       try {
         const summary = await fetchCiStatus(root);
+        opts.onCiSummary?.(summary);
         const text = formatCiStatusForAgent(summary);
         await attempt(`CI · ${summary.state}`, async () => text);
+        useLayoutStore.getState().setBottomTab("output");
+      } catch (err) {
+        setUiError(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+    case "pushWatchCi": {
+      const pushed = await attempt("Pushing…", () => gitPush(root));
+      if (!pushed.ok) return;
+      try {
+        const summary = await fetchCiStatus(root);
+        opts.onCiSummary?.(summary);
+        const text = formatCiStatusForAgent(summary);
+        await attempt(`CI · ${summary.state}`, async () => text);
+        if (summary.state === "failure") {
+          useChatStore.getState().queueAgentPrompt(buildCiFixPrompt(summary));
+        }
         useLayoutStore.getState().setBottomTab("output");
       } catch (err) {
         setUiError(err instanceof Error ? err.message : String(err));
@@ -516,10 +540,19 @@ export async function runScmCommand(
         confirm: "Create draft PR",
       });
       if (!title) return;
+      const plan = usePlanStore.getState().activePlan;
+      const suggested = plan
+        ? draftPrBodyFromPlan({
+            title: plan.title,
+            goal: plan.goal,
+            steps: plan.steps,
+          })
+        : "";
       const body = await ask({
         kind: "input",
         title: "PR description (optional)",
         placeholder: "Summary of changes…",
+        initial: suggested.slice(0, 1500),
         confirm: "Continue",
       });
       try {

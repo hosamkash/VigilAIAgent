@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useCloudAuthStore } from "../../../store/cloudAuthStore";
 import { useTabsStore } from "../../../store/tabsStore";
 
 function startOfDay(ts: number): number {
@@ -33,6 +34,7 @@ export function HistorySidebar() {
   } = useTabsStore();
   const [query, setQuery] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const signedIn = Boolean(useCloudAuthStore((s) => s.user?.uid));
 
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -70,17 +72,25 @@ export function HistorySidebar() {
             useTabsStore.setState({ hydrated: false });
             void hydrate();
           }}
-          title="Reload from VigilDB"
+          title={signedIn ? "Reload from Firestore + local cache" : "Reload from VigilDB"}
         >
           Refresh
         </button>
       </div>
+      {signedIn ? (
+        <button
+          type="button"
+          className="mb-2 w-full rounded border border-[var(--vigil-border)] px-2 py-1.5 text-[11px] text-[var(--vigil-accent)] hover:bg-[var(--vigil-hover)]"
+          onClick={() => void import("../../../lib/ide-commands").then(({ runCommand }) => runCommand("view.cloud"))}
+        >
+          Open account history in Vigil Cloud
+        </button>
+      ) : null}
 
       <div className="mb-2 rounded border border-[var(--vigil-border)] bg-[var(--vigil-hover)] px-2 py-1 text-[10px] text-[var(--vigil-muted)]">
-        Saved in VigilDB ·{" "}
-        <code className="text-[var(--vigil-text)]">
-          VigilAgent.chatSessions
-        </code>
+        {signedIn
+          ? "Account history opens in Vigil Cloud (Firestore). Local restore is the offline cache."
+          : "Saved in VigilDB (sign in to sync the same history as Vigil Web)"}
         {!hydrated ? " · loading…" : ` · ${history.length} archived`}
       </div>
 
@@ -100,7 +110,9 @@ export function HistorySidebar() {
       <div className="min-h-0 flex-1 space-y-3 overflow-auto">
         {groups.length === 0 && (
           <div className="text-xs text-[var(--vigil-muted)]">
-            No archived chats yet — close a chat tab to save it in VigilDB.
+            {signedIn
+              ? "No archived chats in the local cache yet — Open Vigil Cloud for the same Firestore recents."
+              : "No archived chats yet — close a chat tab to save it in VigilDB."}
           </div>
         )}
         {groups.map((g) => (
@@ -118,18 +130,48 @@ export function HistorySidebar() {
                   disabled={busyId === h.id}
                   onClick={() => {
                     setBusyId(h.id);
+                    if (signedIn) {
+                      void import("../../../lib/cloud/open-account-history")
+                        .then(({ openAccountChatInCloud }) => {
+                          if (!openAccountChatInCloud(h.id)) {
+                            return restoreFromHistory(h.id);
+                          }
+                          return undefined;
+                        })
+                        .finally(() => setBusyId(null));
+                      return;
+                    }
                     void restoreFromHistory(h.id).finally(() =>
                       setBusyId(null),
                     );
                   }}
                   className="min-w-0 flex-1 truncate py-1 text-left text-xs"
-                  title="Restore into a chat tab"
+                  title={
+                    signedIn
+                      ? "Open in Vigil Cloud (same Firestore chat as the web)"
+                      : "Restore into a chat tab"
+                  }
                 >
                   {h.title}
                   <span className="ml-1 text-[10px] text-[var(--vigil-muted)]">
                     ({h.messages.length})
                   </span>
                 </button>
+                {signedIn ? (
+                  <button
+                    type="button"
+                    className="hidden px-1 text-[10px] text-[var(--vigil-muted)] group-hover:inline"
+                    title="Restore locally (offline cache)"
+                    onClick={() => {
+                      setBusyId(h.id);
+                      void restoreFromHistory(h.id).finally(() =>
+                        setBusyId(null),
+                      );
+                    }}
+                  >
+                    Local
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="hidden px-1 text-[10px] group-hover:inline"

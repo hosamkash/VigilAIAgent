@@ -24,6 +24,15 @@ import {
   setConfiguredVigilDbPath,
 } from "../lib/vigil-db";
 import { ChatPreferencesFields } from "./ChatQuickSettings";
+import { CloudAccountSettings } from "./CloudAccountSettings";
+import { VercelLiveCard } from "./VercelLiveCard";
+import { DesktopUiDriverCard } from "./DesktopUiDriverCard";
+import { SupportDbCard } from "./SupportDbCard";
+import { SupportActivityCard } from "./SupportActivityCard";
+import { SupportCatalogPanel } from "./SupportCatalogPanel";
+import { SupportSqlPanel } from "./SupportSqlPanel";
+import { AdoSettingsCard } from "./AdoSettingsCard";
+import { OsOpenMenuCard } from "./OsOpenMenuCard";
 import { useAgentSettingsStore } from "../store/agentSettingsStore";
 
 function AgentAutoRunSettings() {
@@ -33,6 +42,12 @@ function AgentAutoRunSettings() {
   const setCommandAllowlist = useAgentSettingsStore((s) => s.setCommandAllowlist);
   const pathDenylist = useAgentSettingsStore((s) => s.pathDenylist);
   const setPathDenylist = useAgentSettingsStore((s) => s.setPathDenylist);
+  const compactRecentCount = useAgentSettingsStore((s) => s.compactRecentCount);
+  const setCompactRecentCount = useAgentSettingsStore((s) => s.setCompactRecentCount);
+  const compactMaxChars = useAgentSettingsStore((s) => s.compactMaxChars);
+  const setCompactMaxChars = useAgentSettingsStore((s) => s.setCompactMaxChars);
+  const indexMaxFiles = useAgentSettingsStore((s) => s.indexMaxFiles);
+  const setIndexMaxFiles = useAgentSettingsStore((s) => s.setIndexMaxFiles);
   return (
     <div className="rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-panel)] p-4">
       <h3 className="text-sm font-semibold">Agent tools</h3>
@@ -83,6 +98,45 @@ function AgentAutoRunSettings() {
           }
         />
       </label>
+      <label className="mt-3 block text-sm">
+        Chat memory (recent turns)
+        <input
+          type="number"
+          min={2}
+          max={20}
+          className="mt-1 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 text-[12px]"
+          value={compactRecentCount}
+          onChange={(e) => setCompactRecentCount(Number(e.target.value))}
+        />
+      </label>
+      <label className="mt-3 block text-sm">
+        Chat memory (max characters)
+        <input
+          type="number"
+          min={4000}
+          max={40000}
+          step={1000}
+          className="mt-1 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 text-[12px]"
+          value={compactMaxChars}
+          onChange={(e) => setCompactMaxChars(Number(e.target.value))}
+        />
+      </label>
+      <label className="mt-3 block text-sm">
+        Deep index max files
+        <div className="mb-1 text-xs text-[var(--vigil-muted)]">
+          Caps first-build walk (also honors <code>.gitignore</code> /{" "}
+          <code>.vigilignore</code>).
+        </div>
+        <input
+          type="number"
+          min={500}
+          max={50000}
+          step={500}
+          className="mt-1 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1 text-[12px]"
+          value={indexMaxFiles}
+          onChange={(e) => setIndexMaxFiles(Number(e.target.value))}
+        />
+      </label>
     </div>
   );
 }
@@ -93,7 +147,16 @@ const PROVIDERS: { id: ApiKeyProvider; label: string }[] = [
   { id: "anthropic", label: "Anthropic" },
 ];
 
-type SettingsPage = "appearance" | "chat" | "keys" | "database" | "usage";
+type SettingsPage =
+  | "account"
+  | "appearance"
+  | "chat"
+  | "keys"
+  | "database"
+  | "connections"
+  | "integrations"
+  | "desktop"
+  | "usage";
 
 const NAV: Array<{
   id: SettingsPage;
@@ -103,6 +166,24 @@ const NAV: Array<{
   soft: string;
   icon: ReactNode;
 }> = [
+  {
+    id: "account",
+    label: "Account",
+    hint: "Cloud Bridge login",
+    accent: "#0078d4",
+    soft: "rgba(0, 120, 212, 0.14)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <circle cx="12" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.7" />
+        <path
+          d="M5 19c1.5-3 4-4.5 7-4.5S17.5 16 19 19"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
   {
     id: "appearance",
     label: "Appearance",
@@ -181,6 +262,71 @@ const NAV: Array<{
     ),
   },
   {
+    id: "connections",
+    label: "DB Connections",
+    hint: "SQL Server / Postgres",
+    accent: "#038387",
+    soft: "rgba(3, 131, 135, 0.14)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <ellipse cx="12" cy="6" rx="7" ry="3" stroke="currentColor" strokeWidth="1.7" />
+        <path
+          d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"
+          stroke="currentColor"
+          strokeWidth="1.7"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "integrations",
+    label: "Integrations",
+    hint: "Azure DevOps tickets",
+    accent: "#0078d4",
+    soft: "rgba(0, 120, 212, 0.12)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <path
+          d="M7 7h10v10H7z"
+          stroke="currentColor"
+          strokeWidth="1.7"
+        />
+        <path
+          d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "desktop",
+    label: "Desktop apps",
+    hint: "Windows EXE testing",
+    accent: "#0078d4",
+    soft: "rgba(0, 120, 212, 0.14)",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <rect
+          x="3.5"
+          y="4.5"
+          width="17"
+          height="12"
+          rx="1.5"
+          stroke="currentColor"
+          strokeWidth="1.7"
+        />
+        <path
+          d="M8 20h8M12 16.5V20"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
+  {
     id: "usage",
     label: "Usage",
     hint: "Cost & tokens",
@@ -215,7 +361,7 @@ export function SettingsPanel() {
   const [busy, setBusy] = useState(false);
   const [bioBusy, setBioBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState<SettingsPage>("appearance");
+  const [page, setPage] = useState<SettingsPage>("account");
   const [useBio, setUseBio] = useState(() => isBiometricEnabled());
   const [bioStatus, setBioStatus] = useState<BiometricStatus | null>(null);
   const [bioMsg, setBioMsg] = useState<string | null>(null);
@@ -451,6 +597,22 @@ export function SettingsPanel() {
                 Quick switch: Light / Dark / Ocean / Forest / Sunset. Preference
                 is saved locally for next launch.
               </div>
+
+              <OsOpenMenuCard />
+            </div>
+          )}
+
+          {page === "account" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">Account</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  Unified Cloud Bridge — one Vigil login for desktop and web.
+                  Plans sync as text/steps only; your repo stays local.
+                </p>
+              </div>
+              <VercelLiveCard />
+              <CloudAccountSettings />
             </div>
           )}
 
@@ -771,6 +933,47 @@ export function SettingsPanel() {
             </code>{" "}
             (History). Close a chat tab to archive it into VigilDB.
               </div>
+            </div>
+          )}
+
+          {page === "connections" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">DB Connections</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  Support / DB Copilot — اتصل بـ SQL Server أو PostgreSQL على LAN/VPN.
+                  البروفايل في <code>.vigil/db-profiles.json</code>، والباسورد محلي فقط.
+                </p>
+              </div>
+              <SupportDbCard />
+              <SupportCatalogPanel />
+              <SupportSqlPanel />
+              <SupportActivityCard />
+            </div>
+          )}
+
+          {page === "integrations" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">Azure DevOps</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  انشر تيكتات الدعم كـ Work Items عبر REST API (PAT الآن، Entra لاحقًا).
+                </p>
+              </div>
+              <AdoSettingsCard />
+            </div>
+          )}
+
+          {page === "desktop" && (
+            <div className="space-y-4 p-6">
+              <div>
+                <h2 className="text-base font-semibold">Desktop apps</h2>
+                <p className="text-sm text-[var(--vigil-muted)]">
+                  تثبيت محرك اختبار برامج ويندوز بضغطة زر — من غير أوامر تيرمينال.
+                  بعد ما يبقى «جاهز»، اطلب من الشات يفتح الـ EXE ويختبر الشاشات.
+                </p>
+              </div>
+              <DesktopUiDriverCard />
             </div>
           )}
 

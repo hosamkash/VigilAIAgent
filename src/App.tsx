@@ -15,6 +15,7 @@ import { useSettingsStore } from "./store/settingsStore";
 import { useLayoutStore } from "./store/layoutStore";
 import { useCostStore } from "./store/costStore";
 import {
+  CHAT_PANE_MIN_PX,
   DEFAULT_LAYOUT,
   mergeHorizontalSizes,
   sizesToPercents,
@@ -25,6 +26,7 @@ import { MenuBar } from "./components/layout/MenuBar";
 import { StatusBar } from "./components/layout/StatusBar";
 import { bindClipWorkspace, installClipCapture } from "./lib/clip-shelf";
 import { useExplorerStore } from "./store/explorerStore";
+import { useCloudAuthStore } from "./store/cloudAuthStore";
 
 function IdeShell() {
   const {
@@ -41,6 +43,13 @@ function IdeShell() {
   useEffect(() => {
     void destroyExtHostWebview();
     void destroyVigilEmbedWebview();
+  }, []);
+
+  useEffect(() => {
+    void import("./lib/cloud/vigil-web-url").then(({ getConfiguredVigilWebUrl }) => {
+      getConfiguredVigilWebUrl();
+    });
+    return useCloudAuthStore.getState().init();
   }, []);
 
   useEffect(() => {
@@ -147,7 +156,7 @@ function IdeShell() {
             </div>
           </Allotment.Pane>
           <Allotment.Pane
-            minSize={300}
+            minSize={CHAT_PANE_MIN_PX}
             preferredSize={`${layoutSizes.horizontal[2]}%`}
             visible={chatVisible}
           >
@@ -181,6 +190,26 @@ function App() {
     if (params.get("agents") === "1") {
       useLayoutStore.setState({ sidebarVisible: false, bottomVisible: false });
     }
+    const stops: Array<() => void> = [];
+    void import("./lib/cloud/deep-link-boot")
+      .then(({ bootVigilDeepLinks }) => bootVigilDeepLinks())
+      .then((un) => {
+        stops.push(un);
+      })
+      .catch(() => {
+        /* offline / no Tauri */
+      });
+    void import("./lib/open-folder-boot")
+      .then(({ bootOpenFolderFromOs }) => bootOpenFolderFromOs())
+      .then((un) => {
+        stops.push(un);
+      })
+      .catch(() => {
+        /* no Tauri */
+      });
+    return () => {
+      for (const u of stops) u();
+    };
   }, [refreshLogs, initLayout]);
 
   let body = <IdeShell />;

@@ -47,6 +47,10 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { EditedFilesList } from "./EditedFilesList";
 import { CommandResultCard } from "./CommandResultCard";
 import { AgentPlanCard } from "./AgentPlanCard";
+import { PlanPanel } from "./PlanPanel";
+import { deriveExecutionOutcome } from "../lib/plan-artifact";
+import { shouldSuggestPlanMode } from "../lib/plan-mode-heuristics";
+import { usePlanStore } from "../store/planStore";
 import { ClipShelfButton } from "./ClipShelfButton";
 import { buildReplyStyleInstruction } from "../lib/chat-preferences";
 import { setClipImageSink, useClipShelf } from "../lib/clip-shelf";
@@ -104,9 +108,18 @@ import {
   type AtMentionQuery,
 } from "../lib/composer-at-mention";
 import { useWorkspaceIndexStore } from "../store/workspaceIndexStore";
+import { useDesktopAppStore } from "../store/desktopAppStore";
+import { useSqlSessionStore } from "../store/sqlSessionStore";
+import { useSqlCatalogStore } from "../store/sqlCatalogStore";
+import { useSupportTicketStore } from "../store/supportTicketStore";
+import { useSecureStore } from "../store/secureStore";
+import type { SecureScanResult } from "../lib/secure-sidecar";
+import { useCloudAuthStore } from "../store/cloudAuthStore";
 import { useExplorerDragStore } from "../lib/explorer-drag-session";
 import { openAndRevealFile } from "../lib/open-workspace-file";
 import { PaneToggleButton } from "./layout/PaneToggleButton";
+import { SupportTicketPanel } from "./SupportTicketPanel";
+import { SecureFindingsPanel } from "./SecureFindingsPanel";
 
 function isAbortError(err: unknown): boolean {
   return (
@@ -442,12 +455,68 @@ function ModelSelect() {
   return (
     <select
       aria-label="Model"
-      className="h-7 max-w-[8.75rem] shrink-0 truncate rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-1.5 text-[11px] normal-case tracking-normal !text-[var(--vigil-text)]"
+      title="Model"
+      className="h-6 w-[92px] shrink-0 truncate rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-1 text-[9px] leading-tight normal-case tracking-normal !text-[var(--vigil-text)]"
       value={selected}
       onChange={(event) => setPreferredProvider(event.target.value)}
     >
       {CHAT_MODEL_OPTIONS.map((item) => (
         <option key={item.id} value={item.id}>
+          {item.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+const CHAT_MODE_OPTIONS = [
+  { id: "agent" as const, label: "Agent", title: "Build and edit code" },
+  {
+    id: "ask" as const,
+    label: "Ask",
+    title: "Questions and discussion — no edits",
+  },
+  {
+    id: "plan" as const,
+    label: "Plan",
+    title: "Investigate and draft a plan — writes blocked until Execute",
+  },
+];
+
+function ChatModeSelect({
+  chatMode,
+  setChatMode,
+  isRunning,
+}: {
+  chatMode: "agent" | "ask" | "plan";
+  setChatMode: (mode: "agent" | "ask" | "plan") => void;
+  isRunning: boolean;
+}) {
+  const active = CHAT_MODE_OPTIONS.find((item) => item.id === chatMode);
+  return (
+    <select
+      aria-label="Chat mode"
+      title={active?.title ?? "Chat mode"}
+      className="h-6 w-[56px] shrink-0 truncate rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-1 text-[9px] leading-tight normal-case tracking-normal !text-[var(--vigil-text)]"
+      value={chatMode}
+      onChange={(event) => {
+        const mode = event.target.value as "agent" | "ask" | "plan";
+        if (mode === chatMode) return;
+        if (isRunning) {
+          const ok = window.confirm(
+            "في دور شغال دلوقتي. تغيير الوضع ممكن يوقف السياق الحالي.\n\n" +
+              "A turn is running. Switch modes anyway?",
+          );
+          if (!ok) {
+            event.target.value = chatMode;
+            return;
+          }
+        }
+        setChatMode(mode);
+      }}
+    >
+      {CHAT_MODE_OPTIONS.map((item) => (
+        <option key={item.id} value={item.id} title={item.title}>
           {item.label}
         </option>
       ))}
@@ -940,6 +1009,9 @@ export function ChatPanel() {
     summary: string;
   } | null>(null);
   const agentAutoRun = useAgentSettingsStore((s) => s.agentAutoRun);
+  const chatMode = useAgentSettingsStore((s) => s.chatMode);
+  const setChatMode = useAgentSettingsStore((s) => s.setChatMode);
+  const activePlan = usePlanStore((s) => s.activePlan);
   const [checkpointIds, setCheckpointIds] = useState<Set<string>>(new Set());
   const [folds, setFolds] = useState<Record<string, TurnFold>>({});
   const fold = folds[tabKey] ?? { mode: "all-open" as const, except: [] };
@@ -1041,9 +1113,15 @@ export function ChatPanel() {
     }
   }
 
+  const cloudConfigured = useCloudAuthStore((s) => s.configured);
+  const cloudReady = useCloudAuthStore((s) => s.ready);
+  const cloudUser = useCloudAuthStore((s) => s.user);
+
   useEffect(() => {
+    // Wait for Firebase auth restore so signed-in hydrate pulls Firestore first.
+    if (cloudConfigured && !cloudReady) return;
     void hydrate().then(() => backfillChatTabTitles());
-  }, [hydrate]);
+  }, [hydrate, cloudConfigured, cloudReady]);
 
   useEffect(() => {
     if (!activeTabId && tabs[0]) setActive(tabs[0].id);
@@ -1259,6 +1337,11 @@ export function ChatPanel() {
   function cancelRunning() {
     abortRef.current?.abort();
     setToolApproval(null);
+    // Chat Stop mid-plan → pause (keep statuses) rather than cancel the plan.
+    const plan = usePlanStore.getState().activePlan;
+    if (plan?.status === "running") {
+      void usePlanStore.getState().pauseExecute();
+    }
   }
 
   async function answerToolApproval(decision: "allow" | "skip" | "allow_session") {
@@ -1503,9 +1586,10 @@ export function ChatPanel() {
       promptForAgent = attachReferencedChats(promptForAgent, tabId, findChatByRequestId);
 
       // Continuity for long monorepo sessions: compact older turns, keep recent verbatim.
+      const compact = useAgentSettingsStore.getState();
       const historyBlock = buildCompactChatHistory(messagesOf(tabId), {
-        recentCount: 6,
-        maxChars: 14_000,
+        recentCount: compact.compactRecentCount ?? 6,
+        maxChars: compact.compactMaxChars ?? 14_000,
         skipLastUser: true,
       });
       if (historyBlock) {
@@ -1556,6 +1640,10 @@ export function ChatPanel() {
         checkpointAt: Date.now(),
         replyStyle: styleParts.join("\n\n"),
         autoRun: useAgentSettingsStore.getState().agentAutoRun,
+        planMode: useAgentSettingsStore.getState().chatMode === "plan",
+        askMode: useAgentSettingsStore.getState().chatMode === "ask",
+        planExecuteUnlocked:
+          usePlanStore.getState().planExecuteUnlocked === true,
         commandAllowlist: useAgentSettingsStore.getState().commandAllowlist,
         pathDenylist: useAgentSettingsStore.getState().pathDenylist,
         cwd: (await getWorkspaceCwd().catch(() => undefined)) || undefined,
@@ -1574,6 +1662,23 @@ export function ChatPanel() {
           const encoded =
             typeof inner === "string" ? inner : inner ? JSON.stringify(inner) : "";
           if (encoded) takeText(encoded);
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "find_definition" &&
+          Array.isArray(event.locations) &&
+          event.locations.length
+        ) {
+          const lines = event.locations
+            .slice(0, 12)
+            .map((loc) => {
+              const line = typeof loc.line === "number" && loc.line > 0 ? loc.line : 1;
+              const title = loc.title ? `${loc.title} · ` : "";
+              return `- ${title}\`${loc.path}:${line}\``;
+            })
+            .join("\n");
+          const note = `Definitions (open at line):\n${lines}`;
+          notes = notes ? `${notes}\n\n${note}` : note;
+          publish(null);
         } else if (
           event.type === "tool" &&
           (event.toolName === "get_ci_status" ||
@@ -1615,6 +1720,15 @@ export function ChatPanel() {
               status: normalizePlanStatus(String(item.status || "pending")),
             }))
             .filter((item) => item.content);
+          if (
+            useAgentSettingsStore.getState().chatMode === "plan" ||
+            usePlanStore.getState().activePlan
+          ) {
+            void usePlanStore.getState().syncFromManagePlan(planItems, {
+              chatTabId: tabId,
+              goal: userVisible.slice(0, 120) || undefined,
+            });
+          }
           publish(null);
         } else if (
           event.type === "tool" &&
@@ -1633,7 +1747,9 @@ export function ChatPanel() {
                     ? "failed"
                     : statusRaw === "completed"
                       ? "completed"
-                      : "pending";
+                      : statusRaw === "cancelled" || statusRaw === "canceled"
+                        ? "cancelled"
+                        : "pending";
               const detail = job.error
                 ? ` — ${job.error}`
                 : job.result
@@ -1757,6 +1873,86 @@ export function ChatPanel() {
           const dataUrl = `data:image/png;base64,${event.imageBase64}`;
           takeText(`\n![browser screenshot](${dataUrl})\n`);
           publish(null);
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "app_screenshot" &&
+          event.imageBase64
+        ) {
+          const dataUrl = `data:image/png;base64,${event.imageBase64}`;
+          const label = event.title
+            ? `app screenshot (${event.title})`
+            : "app screenshot";
+          takeText(`\n![${label}](${dataUrl})\n`);
+          publish(null);
+        } else if (event.type === "tool" && event.toolName === "app_session") {
+          if (event.attached) {
+            useDesktopAppStore.getState().setSession({
+              attached: true,
+              pid: typeof event.pid === "number" ? event.pid : null,
+              title: typeof event.title === "string" ? event.title : null,
+              path: typeof event.path === "string" ? event.path : null,
+            });
+          } else {
+            useDesktopAppStore.getState().clear();
+          }
+          publish(null);
+        } else if (event.type === "tool" && event.toolName === "sql_session") {
+          if (event.connected) {
+            useSqlSessionStore.getState().setSession({
+              connected: true,
+              engine:
+                event.engine === "mssql" || event.engine === "postgres"
+                  ? event.engine
+                  : null,
+              profileId:
+                typeof event.profileId === "string" ? event.profileId : null,
+              label: typeof event.label === "string" ? event.label : null,
+              database:
+                typeof event.database === "string" ? event.database : null,
+              readOnly: event.readOnly !== false,
+            });
+          } else {
+            useSqlSessionStore.getState().clear();
+            useSqlCatalogStore.getState().clear();
+          }
+          publish(null);
+        } else if (
+          event.type === "tool" &&
+          event.toolName === "draft_support_ticket" &&
+          event.supportTicket &&
+          typeof event.supportTicket === "object"
+        ) {
+          void useSupportTicketStore
+            .getState()
+            .applyDraftFromAgent(
+              event.supportTicket as Record<string, unknown>,
+            );
+          publish(null);
+        } else if (
+          event.type === "tool" &&
+          (event.toolName === "secure_scan_passive" ||
+            event.toolName === "secure_scan_active") &&
+          event.secureScan &&
+          typeof event.secureScan === "object"
+        ) {
+          const scan = event.secureScan as SecureScanResult;
+          useSecureStore.setState({
+            lastScan: {
+              ok: scan.ok !== false,
+              error: scan.error,
+              pack: scan.pack,
+              target: scan.target,
+              scannedAt: scan.scannedAt,
+              findings: Array.isArray(scan.findings) ? scan.findings : [],
+              summary: scan.summary,
+            },
+            selectedFinding: Array.isArray(scan.findings)
+              ? scan.findings[0] || null
+              : null,
+            panelOpen: true,
+            error: scan.ok === false ? scan.error || "Scan blocked" : null,
+          });
+          publish(null);
         } else if (event.type === "done") {
           stream.adoptFinal(event.text);
           if (!browserOpenedThisTurn) {
@@ -1861,7 +2057,133 @@ export function ChatPanel() {
       runningRef.current = false;
       setRunningTabId(null);
       setRunning(false);
+      const plan = usePlanStore.getState().activePlan;
+      if (plan?.status === "running" || plan?.status === "failed") {
+        const outcome = deriveExecutionOutcome(plan);
+        if (outcome === "failed" && plan.status === "running") {
+          void usePlanStore.getState().completeExecute(false, "A step failed");
+        } else if (outcome === "completed" && plan.status === "running") {
+          void usePlanStore.getState().completeExecute(true);
+        } else if (plan.status === "running" && outcome === "running") {
+          // Turn ended mid-plan → auto-pause so Resume is available.
+          void usePlanStore.getState().pauseExecute();
+        }
+      }
     }
+  }
+
+  function enqueueTurn(turn: QueuedTurn) {
+    nameChatTabFromFirstMessage(turn.tabId, turn.userVisible);
+    if (runningRef.current) {
+      syncQueue([...queueRef.current, turn]);
+      return;
+    }
+    void drainQueue(turn);
+  }
+
+  async function enqueuePlanTurn(prompt: string, userVisible: string) {
+    if (!activeTab) return;
+    setChatMode("agent");
+    const turn: QueuedTurn = {
+      id: crypto.randomUUID(),
+      tabId: activeTab.id,
+      promptBase: prompt,
+      userVisible,
+      otherNote: "",
+      displayImages: [],
+      attachments: [],
+      modelChoice: useChatStore.getState().preferredProvider || "auto",
+    };
+    enqueueTurn(turn);
+  }
+
+  async function executeActivePlan() {
+    if (!activeTab || isRunning) return;
+    const prompt = await usePlanStore.getState().beginExecute();
+    if (!prompt) return;
+    const title = usePlanStore.getState().activePlan?.title || "Plan";
+    await enqueuePlanTurn(prompt, `Execute plan: ${title}`);
+  }
+
+  const executeActivePlanRef = useRef(executeActivePlan);
+  executeActivePlanRef.current = executeActivePlan;
+
+  const queuedAgentPrompt = useChatStore((s) => s.queuedAgentPrompt);
+  const enqueuePlanTurnRef = useRef(enqueuePlanTurn);
+  enqueuePlanTurnRef.current = enqueuePlanTurn;
+  useEffect(() => {
+    if (!queuedAgentPrompt) return;
+    useChatStore.getState().clearQueuedAgentPrompt();
+    if (!useLayoutStore.getState().chatVisible) {
+      useLayoutStore.getState().toggleChat();
+    }
+    void enqueuePlanTurnRef.current(
+      queuedAgentPrompt,
+      queuedAgentPrompt.slice(0, 120),
+    );
+  }, [queuedAgentPrompt]);
+
+  useEffect(() => {
+    async function onCloudExecute(ev: Event) {
+      const planId = String(
+        (ev as CustomEvent<{ planId?: string }>).detail?.planId || "",
+      ).trim();
+      if (!planId) return;
+      try {
+        const store = usePlanStore.getState();
+        if (store.activePlan?.id !== planId) {
+          await store.openPlan(planId);
+        }
+        const afterOpen = usePlanStore.getState();
+        const plan = afterOpen.activePlan;
+        if (!plan || plan.id !== planId) {
+          notify(
+            afterOpen.error ||
+              `Cloud Execute: plan ${planId} not found. Sign in + open workspace, or Pull plans from cloud.`,
+          );
+          return;
+        }
+        await executeActivePlanRef.current();
+      } catch (err) {
+        notify(
+          err instanceof Error ? err.message : "Cloud Execute handoff failed",
+        );
+      }
+    }
+    window.addEventListener("vigil:request-execute", onCloudExecute);
+    return () =>
+      window.removeEventListener("vigil:request-execute", onCloudExecute);
+  }, []);
+
+  async function pauseActivePlan() {
+    cancelRunning();
+    if (usePlanStore.getState().activePlan?.status === "running") {
+      await usePlanStore.getState().pauseExecute();
+    }
+  }
+
+  async function resumeActivePlan() {
+    if (!activeTab || isRunning) return;
+    const prompt = await usePlanStore.getState().resumeExecute();
+    if (!prompt) return;
+    const title = usePlanStore.getState().activePlan?.title || "Plan";
+    await enqueuePlanTurn(prompt, `Resume plan: ${title}`);
+  }
+
+  async function retryFailedPlanStep() {
+    if (!activeTab || isRunning) return;
+    const prompt = await usePlanStore.getState().retryFailed();
+    if (!prompt) return;
+    const title = usePlanStore.getState().activePlan?.title || "Plan";
+    await enqueuePlanTurn(prompt, `Retry plan step: ${title}`);
+  }
+
+  async function continueAfterPlanFailure() {
+    if (!activeTab || isRunning) return;
+    const prompt = await usePlanStore.getState().continueAfterFailure();
+    if (!prompt) return;
+    const title = usePlanStore.getState().activePlan?.title || "Plan";
+    await enqueuePlanTurn(prompt, `Continue plan: ${title}`);
   }
 
   async function onSubmit(e?: FormEvent | { preventDefault?: () => void }) {
@@ -1902,6 +2224,22 @@ export function ChatPanel() {
         ? `\n\n[Attachments: ${otherAttachments.map((a) => a.name).join(", ")}]`
         : "";
 
+    const settings = useAgentSettingsStore.getState();
+    if (
+      settings.chatMode === "agent" &&
+      settings.autoSuggestPlanMode &&
+      shouldSuggestPlanMode(draftText || userVisible)
+    ) {
+      const switchToPlan = window.confirm(
+        "يبدو إن المهمة كبيرة / متعددة الخطوات.\n\n" +
+          "تحب نحوّل لـ Plan mode ونخطط قبل التعديل؟\n\n" +
+          "This looks like a multi-step task. Switch to Plan mode first?",
+      );
+      if (switchToPlan) {
+        setChatMode("plan");
+      }
+    }
+
     const modelChoice = useChatStore.getState().preferredProvider || "auto";
     const turn: QueuedTurn = {
       id: crypto.randomUUID(),
@@ -1914,7 +2252,6 @@ export function ChatPanel() {
       modelChoice,
     };
 
-    nameChatTabFromFirstMessage(activeTab.id, userVisible);
     draftRef.current = "";
     setActiveDraft("");
     setAttachments([]);
@@ -1923,11 +2260,7 @@ export function ChatPanel() {
       ignoreDictationRef.current = false;
     }, 400);
 
-    if (runningRef.current) {
-      syncQueue([...queueRef.current, turn]);
-      return;
-    }
-    void drainQueue(turn);
+    enqueueTurn(turn);
   }
 
   function refreshAtMention(text: string, caret: number) {
@@ -1937,15 +2270,39 @@ export function ChatPanel() {
       return;
     }
     const raw = mention.query;
+    const tableMode =
+      /^table[:/]/i.test(raw) || /^db[:/]/i.test(raw);
     const symbolMode =
       raw.startsWith("symbol:") ||
       raw.startsWith("symbol/") ||
       raw.startsWith("#");
     const q = symbolMode
       ? raw.replace(/^(symbol:|symbol\/|#)/i, "")
-      : raw;
+      : tableMode
+        ? raw.replace(/^(table[:/]|db[:/])/i, "")
+        : raw;
     const explorer = useExplorerStore.getState();
     const indexStore = useWorkspaceIndexStore.getState();
+
+    if (tableMode || (!symbolMode && useSqlSessionStore.getState().connected && /^(t|ta|tab|tabl|table)/i.test(raw))) {
+      const catalog = useSqlCatalogStore.getState();
+      if (catalog.objects.length === 0 && useSqlSessionStore.getState().connected) {
+        void catalog.refresh();
+      }
+      const hits = catalog.search(q, 12).map(
+        (obj): AtMentionCandidate => ({
+          path: `__sql__:${obj.key}`,
+          name: obj.name,
+          isDir: false,
+          label: `@table:${obj.key}`,
+          score: 90,
+        }),
+      );
+      if (tableMode || hits.length) {
+        setAtMention({ mention, candidates: hits, index: 0 });
+        if (tableMode) return;
+      }
+    }
 
     if (!symbolMode) {
       const labels = {
@@ -2061,7 +2418,16 @@ export function ChatPanel() {
     draftRef.current = next;
     setActiveDraft(next);
     const root = useExplorerStore.getState().root;
-    if (candidate.virtualId) {
+    if (candidate.path.startsWith("__sql__:")) {
+      const key = candidate.path.slice("__sql__:".length);
+      const [schema, ...rest] = key.split(".");
+      const name = rest.join(".") || candidate.name;
+      useComposerContextStore.getState().addSqlTable({
+        schema: schema || "dbo",
+        name,
+        connectionLabel: useSqlSessionStore.getState().label,
+      });
+    } else if (candidate.virtualId) {
       useComposerContextStore.getState().addVirtual(candidate.virtualId);
     } else if (candidate.symbolLine) {
       useComposerContextStore.getState().addSymbol({
@@ -2211,6 +2577,31 @@ export function ChatPanel() {
         <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
 
+      {cloudUser ? (
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--vigil-border)] px-3 py-1.5 text-[11px] text-[var(--vigil-muted)]">
+          <span>
+            هستوري الحساب على Firestore — افتح Vigil Cloud لنفس الشاتس/الخطط.
+          </span>
+          <button
+            type="button"
+            className="shrink-0 rounded border border-[var(--vigil-border)] px-2 py-0.5 text-[10px] text-[var(--vigil-accent)] hover:bg-[var(--vigil-hover)]"
+            onClick={() => {
+              const id = activeTabId;
+              void import("../lib/cloud/open-cloud-embed").then(
+                ({ openCloudEmbedTab }) => {
+                  openCloudEmbedTab({
+                    focus: true,
+                    nextPath: id ? `/app/chats/${id}` : "/app",
+                  });
+                },
+              );
+            }}
+          >
+            Open Cloud
+          </button>
+        </div>
+      ) : null}
+
       <ChatTabBar
         tabs={tabs}
         history={history}
@@ -2235,6 +2626,18 @@ export function ChatPanel() {
       />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-3">
+        {chatMode === "plan" || activePlan ? (
+          <PlanPanel
+            onExecute={() => void executeActivePlan()}
+            onPause={() => void pauseActivePlan()}
+            onResume={() => void resumeActivePlan()}
+            onRetry={() => void retryFailedPlanStep()}
+            onContinue={() => void continueAfterPlanFailure()}
+            busy={isRunning}
+          />
+        ) : null}
+        <SupportTicketPanel />
+        <SecureFindingsPanel />
         <div className="space-y-3">
           {messages.length === 0 && (
             <div className="rounded border border-dashed border-[var(--vigil-border)] p-3 text-xs text-[var(--vigil-muted)]">
@@ -2306,7 +2709,7 @@ export function ChatPanel() {
       <form
         data-chat-composer
         onSubmit={(e) => void onSubmit(e)}
-        className={`relative border-t border-[var(--vigil-border)] p-3 transition-colors ${
+        className={`relative border-t border-[var(--vigil-border)] px-2.5 py-1.5 transition-colors ${
           composerHighlight
             ? "bg-[var(--vigil-accent-soft)] ring-2 ring-inset ring-[var(--vigil-accent)]"
             : ""
@@ -2397,7 +2800,11 @@ export function ChatPanel() {
                             ? "▤"
                             : chip.kind === "virtual"
                               ? "@"
-                              : "⌘"}
+                              : chip.kind === "sql_table"
+                                ? "▦"
+                                : chip.kind === "sql_snippet"
+                                  ? "SQL"
+                                  : "⌘"}
                   </span>
                   {isPath && chip.path ? (
                     <button
@@ -2421,8 +2828,16 @@ export function ChatPanel() {
                     </button>
                   ) : (
                     <span className="truncate font-medium">
-                      @{chip.title}
-                      {chip.kind === "virtual" ? "" : ` (${chip.detail})`}
+                      {chip.kind === "sql_table"
+                        ? `@table:${chip.sqlObject || chip.title}`
+                        : chip.kind === "sql_snippet"
+                          ? `@sql:${chip.title}`
+                          : `@${chip.title}`}
+                      {chip.kind === "virtual" ||
+                      chip.kind === "sql_table" ||
+                      chip.kind === "sql_snippet"
+                        ? ""
+                        : ` (${chip.detail})`}
                     </span>
                   )}
                   <button
@@ -2605,50 +3020,54 @@ export function ChatPanel() {
           </p>
         )}
 
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <ModelSelect />
-            <ChatQuickSettingsButton />
-            <button
-              type="button"
-              title="Attach"
-              aria-label="Attach"
-              className="flex h-8 w-8 items-center justify-center rounded-md bg-sky-600 !text-white hover:bg-sky-700"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip className="h-4 w-4" />
-            </button>
-            <ClipShelfButton />
-            <button
-              type="button"
-              title="Clear text and attachments"
-              aria-label="Clear text and attachments"
-              disabled={
-                !draft.trim() &&
-                attachments.length === 0 &&
-                contextChips.length === 0
-              }
-              className="flex h-8 w-8 items-center justify-center rounded-md bg-rose-600 !text-white hover:bg-rose-700 disabled:opacity-40"
-              onClick={clearComposer}
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-            <SpeechDictationMicButton
-              size="md"
-              vivid
-              active={listening}
-              onClick={() => toggleMic()}
-              title={listening ? "Stop dictation" : "Start dictation"}
-            />
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*,*/*"
-              className="hidden"
-              onChange={(e) => onFilesSelected(e.target.files)}
-            />
-          </div>
+        <div className="mt-1 flex flex-nowrap items-center gap-1.5">
+          <ModelSelect />
+          <ChatModeSelect
+            chatMode={chatMode}
+            setChatMode={setChatMode}
+            isRunning={isRunning}
+          />
+          <ChatQuickSettingsButton />
+          <button
+            type="button"
+            title="Attach"
+            aria-label="Attach"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-600 !text-white hover:bg-sky-700"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+          <ClipShelfButton />
+          <button
+            type="button"
+            title="Clear text and attachments"
+            aria-label="Clear text and attachments"
+            disabled={
+              !draft.trim() &&
+              attachments.length === 0 &&
+              contextChips.length === 0
+            }
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rose-600 !text-white hover:bg-rose-700 disabled:opacity-40"
+            onClick={clearComposer}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+          <SpeechDictationMicButton
+            size="md"
+            vivid
+            className="shrink-0"
+            active={listening}
+            onClick={() => toggleMic()}
+            title={listening ? "Stop dictation" : "Start dictation"}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,*/*"
+            className="hidden"
+            onChange={(e) => onFilesSelected(e.target.files)}
+          />
           <button
             type={isRunning ? "button" : "submit"}
             disabled={!isRunning && !canSend}
@@ -2662,7 +3081,7 @@ export function ChatPanel() {
                   }
                 : undefined
             }
-            className={`flex h-9 w-9 items-center justify-center rounded-full !text-white disabled:opacity-40 ${
+            className={`ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full !text-white disabled:opacity-40 ${
               isRunning
                 ? "bg-[var(--vigil-danger)]"
                 : "bg-[var(--vigil-accent)]"
@@ -2671,7 +3090,7 @@ export function ChatPanel() {
             {isRunning ? (
               <Square className="h-3.5 w-3.5 fill-current" />
             ) : (
-              <ArrowUp className="h-5 w-5" />
+              <ArrowUp className="h-4 w-4" />
             )}
           </button>
         </div>

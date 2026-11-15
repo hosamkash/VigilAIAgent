@@ -7,6 +7,8 @@ import { useEditorTabsStore, type EditorTab } from "../store/editorTabsStore";
 import { useExplorerStore } from "../store/explorerStore";
 import { useLayoutStore, type SidebarView } from "../store/layoutStore";
 import { useSettingsStore } from "../store/settingsStore";
+import { useScmReposStore } from "../store/scmReposStore";
+import { useTabsStore } from "../store/tabsStore";
 import { useTerminalStore } from "../store/terminalStore";
 import { useWorkspaceIndexStore } from "../store/workspaceIndexStore";
 import { useInlineEditStore } from "../store/inlineEditStore";
@@ -39,6 +41,7 @@ const MONACO: Record<string, string> = {
   "go.def": "editor.action.revealDefinition",
   "go.refs": "editor.action.goToReferences",
   "go.peek": "editor.action.peekDefinition",
+  "edit.rename": "editor.action.rename",
 };
 
 export function isEditorCommand(id: string): boolean {
@@ -421,6 +424,12 @@ export async function runCommand(id: string): Promise<void> {
       case "view.run":
         showView("run");
         return;
+      case "view.database":
+        showView("database");
+        return;
+      case "view.tickets":
+        showView("tickets");
+        return;
       case "view.extensions":
         showView("extensions");
         return;
@@ -428,10 +437,23 @@ export async function runCommand(id: string): Promise<void> {
         showView("history");
         return;
       case "view.browser": {
+        useLayoutStore.getState().showSidebar("browser");
         const { detectProjectPreviewUrl } = await import("./project-url");
         const root = useExplorerStore.getState().root;
         const hint = await detectProjectPreviewUrl(root);
         useEditorTabsStore.getState().openBrowser(hint ?? "");
+        return;
+      }
+      case "view.cloud": {
+        const { isVigilWebConfigured } = await import("./cloud/vigil-web-url");
+        const { openCloudEmbedTab } = await import("./cloud/open-cloud-embed");
+        if (!isVigilWebConfigured()) {
+          toast(
+            "Set Vigil Web URL in Settings → Account (or VITE_VIGIL_WEB_URL), then open Cloud again.",
+          );
+          return;
+        }
+        openCloudEmbedTab({ focus: true });
         return;
       }
       case "view.problems":
@@ -454,6 +476,26 @@ export async function runCommand(id: string): Promise<void> {
       case "view.chat":
         useLayoutStore.getState().toggleChat();
         return;
+      case "chat.new": {
+        const layout = useLayoutStore.getState();
+        if (!layout.chatVisible) layout.toggleChat();
+        useTabsStore.getState().newTab("Chat");
+        return;
+      }
+      case "scm.addRepo": {
+        showView("scm");
+        if (!inTauri()) {
+          toast("Open a Git folder from Source Control → +");
+          return;
+        }
+        {
+          const picked = await openDialog({ directory: true, multiple: false });
+          if (typeof picked !== "string" || !picked) return;
+          const added = useScmReposStore.getState().addRepoPath(picked);
+          toast(added ? `Added ${added.displayName}` : "Not a Git repository");
+        }
+        return;
+      }
       case "view.panel":
         useLayoutStore.getState().toggleBottom();
         return;

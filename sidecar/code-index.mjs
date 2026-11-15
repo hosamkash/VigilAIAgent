@@ -22,6 +22,7 @@ import {
   searchVectors,
   hybridRank,
 } from "./local-embed.mjs";
+import { loadWorkspaceIgnore, shouldSkipRelative } from "./index-ignore.mjs";
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -101,7 +102,7 @@ function normRel(rel) {
     .replace(/^\.\//, "");
 }
 
-async function walkFiles(dir, out, maxFiles) {
+async function walkFiles(dir, out, maxFiles, ctx) {
   if (out.length >= maxFiles) return;
   let entries;
   try {
@@ -116,10 +117,14 @@ async function walkFiles(dir, out, maxFiles) {
     if (name === ".DS_Store") continue;
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(name)) continue;
+      if (ctx?.ignore?.dirNames?.has(name)) continue;
       if (name.startsWith(".") && name !== ".vigil" && name !== ".github") continue;
       dirs.push(path.join(dir, name));
     } else if (entry.isFile() && shouldIndexFile(name)) {
-      files.push(path.join(dir, name));
+      const abs = path.join(dir, name);
+      const rel = path.relative(ctx.root, abs).split(path.sep).join("/");
+      if (ctx?.ignore && shouldSkipRelative(rel, ctx.ignore)) continue;
+      files.push(abs);
     }
   }
   files.sort();
@@ -130,8 +135,16 @@ async function walkFiles(dir, out, maxFiles) {
   dirs.sort();
   for (const d of dirs) {
     if (out.length >= maxFiles) break;
-    await walkFiles(d, out, maxFiles);
+    await walkFiles(d, out, maxFiles, ctx);
   }
+}
+
+async function collectIndexFiles(root, maxFiles) {
+  const ignore = await loadWorkspaceIgnore(root);
+  /** @type {string[]} */
+  const files = [];
+  await walkFiles(root, files, maxFiles, { root, ignore });
+  return files;
 }
 
 /**
@@ -272,9 +285,7 @@ export async function buildCodeIndex(cwd, opts = {}) {
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
   const maxChunks = opts.maxChunks ?? DEFAULT_MAX_CHUNKS;
   const root = path.resolve(cwd);
-  /** @type {string[]} */
-  const files = [];
-  await walkFiles(root, files, maxFiles);
+  const files = await collectIndexFiles(root, maxFiles);
 
   /** @type {IndexChunk[]} */
   let chunks = [];
@@ -342,9 +353,7 @@ export async function syncCodeIndex(cwd, opts = {}) {
 
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
   const maxChunks = opts.maxChunks ?? DEFAULT_MAX_CHUNKS;
-  /** @type {string[]} */
-  const absFiles = [];
-  await walkFiles(root, absFiles, maxFiles);
+  const absFiles = await collectIndexFiles(root, maxFiles);
 
   /** @type {Map<string, string>} rel → content */
   const current = new Map();
@@ -461,12 +470,15 @@ export async function loadCodeIndex(cwd) {
  */
 export async function ensureCodeIndex(cwd, opts = {}) {
   const force = !!opts.force;
-  if (force) return buildCodeIndex(cwd);
+  const budget = {
+    maxFiles: opts.maxFiles ?? DEFAULT_MAX_FILES,
+    maxChunks: opts.maxChunks ?? DEFAULT_MAX_CHUNKS,
+  };
+  if (force) return buildCodeIndex(cwd, budget);
   const existing = await loadCodeIndex(cwd);
-  if (!existing) return buildCodeIndex(cwd);
-  if (existing.version !== INDEX_VERSION) return buildCodeIndex(cwd);
-  // Prefer incremental sync over blind age rebuild
-  return syncCodeIndex(cwd);
+  if (!existing) return buildCodeIndex(cwd, budget);
+  if (existing.version !== INDEX_VERSION) return buildCodeIndex(cwd, budget);
+  return syncCodeIndex(cwd, budget);
 }
 
 /**
@@ -705,4 +717,10 @@ export function formatIndexHits(query, result) {
   return lines.join("\n");
 }
 
-export { clearMemory, shouldIndexFile, INDEX_VERSION, DEFAULT_MAX_FILES };
+export {
+  clearMemory,
+  shouldIndexFile,
+  INDEX_VERSION,
+  DEFAULT_MAX_FILES,
+  DEFAULT_MAX_CHUNKS,
+};

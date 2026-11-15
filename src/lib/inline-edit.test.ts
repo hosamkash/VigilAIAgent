@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInlineEditPrompt,
   extractEditedCode,
+  previewUnifiedDiff,
 } from "./inline-edit";
 
 describe("inline-edit", () => {
@@ -27,5 +28,11 @@ describe("inline-edit", () => {
     expect(prompt).toContain("rename x to total");
     expect(prompt).toContain("src/a.ts:10-10");
     expect(prompt).toContain("const x = 1;");
+  });
+
+  it("previews a unified-style diff before apply", () => {
+    const diff = previewUnifiedDiff("const x = 1;", "const total = 1;", "a.ts");
+    expect(diff).toContain("-const x = 1;");
+    expect(diff).toContain("+const total = 1;");
   });
 });

@@ -4,6 +4,10 @@
  */
 
 import { buildToolPolicies, createApprovalGate } from "./approvals.mjs";
+import {
+  isDelegateCancelled,
+  onDelegateCancel,
+} from "./delegate-runtime.mjs";
 
 /**
  * @param {object} opts
@@ -71,7 +75,18 @@ export async function runFocusedSubagent(opts) {
     "Do not create pull requests or spawn further delegates. " +
     "When done, reply with a concise summary of changes and findings.";
 
+  const offCancel = onDelegateCancel(() => {
+    try {
+      void cline.dispose();
+    } catch {
+      /* ignore */
+    }
+  });
+
   try {
+    if (isDelegateCancelled()) {
+      return { ok: false, text: "", error: "cancelled", title };
+    }
     emit({
       type: "status",
       status: `delegate_start:${title}`,
@@ -96,6 +111,9 @@ export async function runFocusedSubagent(opts) {
       interactive: false,
       localRuntime: { extraTools },
     });
+    if (isDelegateCancelled()) {
+      return { ok: false, text: "", error: "cancelled", title };
+    }
     const text = String(started.result?.text || "").trim() || "(no summary)";
     emit({
       type: "status",
@@ -108,8 +126,14 @@ export async function runFocusedSubagent(opts) {
       type: "status",
       status: `delegate_failed:${title}`,
     });
-    return { ok: false, text: "", error: message, title };
+    return {
+      ok: false,
+      text: "",
+      error: isDelegateCancelled() ? "cancelled" : message,
+      title,
+    };
   } finally {
+    offCancel();
     try {
       approvalGate.cancelAll();
     } catch {

@@ -72,27 +72,64 @@ export async function create_pull_request(
   return { ok: true, output: result.output.trim() || "PR created" };
 }
 
+/** Parse `gh pr checks` tabular output without hitting the network. */
+export function parseGhPrChecks(text) {
+  const raw = String(text || "");
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const failedLines = lines.filter((l) => {
+    const cells = l.split(/\t+/);
+    const status = (cells[1] || cells[0] || "").toLowerCase();
+    return /\bfail/.test(status) || (/\bfail/i.test(l) && !/\bpass/.test(status));
+  });
+  const pending = lines.some((l) =>
+    /\bpending\b|\bin progress\b|\bqueued\b/i.test(l),
+  );
+  return {
+    failed: failedLines.length > 0,
+    pending: pending && failedLines.length === 0,
+    failedLines,
+  };
+}
+
+/** File:line hints from CI logs / check tables. */
+export function extractCiFailureHints(text) {
+  const raw = String(text || "");
+  const hits = [];
+  const re =
+    /(?:^|[\s"'`(])([A-Za-z0-9_./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|cs|java))(?::(\d+))?/g;
+  let m;
+  while ((m = re.exec(raw))) {
+    const file = m[1].replace(/\\/g, "/");
+    const line = m[2] ? `${file}:${m[2]}` : file;
+    if (!hits.includes(line)) hits.push(line);
+    if (hits.length >= 12) break;
+  }
+  return hits;
+}
+
 export async function get_ci_status(cwd = process.cwd()) {
   const checks = await run("gh pr checks", cwd);
   if (checks.ok || checks.output.trim()) {
     const text = checks.output.trim() || checks.error || "";
-    const failed = /\bfail/i.test(text);
-    const pending = /\bpending\b|\bin progress\b/i.test(text);
-    const failedLines = text
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => /\bfail/i.test(l));
+    const parsed = parseGhPrChecks(text);
+    const hints = extractCiFailureHints(text);
     return {
       ok: true,
-      failed,
-      pending,
+      failed: parsed.failed,
+      pending: parsed.pending,
       output: [
-        `CI via gh pr checks (${failed ? "failure" : pending ? "pending" : "ok"}):`,
+        `CI via gh pr checks (${parsed.failed ? "failure" : parsed.pending ? "pending" : "ok"}):`,
         text || "(no checks reported)",
-        failed
-          ? `\nFailing checks:\n${failedLines.map((l) => `- ${l}`).join("\n") || "- (see above)"}\n` +
-            "Fix with apply_patch, then push_and_check_ci (or git push + get_ci_status)."
-          : pending
+        parsed.failed
+          ? `\nFailing checks:\n${parsed.failedLines.map((l) => `- ${l}`).join("\n") || "- (see above)"}\n` +
+            (hints.length
+              ? `Likely files:\n${hints.map((h) => `- ${h}`).join("\n")}\n`
+              : "") +
+            "Fix with apply_patch, then push_and_check_ci (or git push + get_ci_status). Do not force-push."
+          : parsed.pending
             ? "\nChecks still pending — wait briefly and call get_ci_status again."
             : "\nCI looks green.",
       ]

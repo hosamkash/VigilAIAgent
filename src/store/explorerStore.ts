@@ -107,6 +107,19 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       set({ loading: false, root: null, extraRoots: [], launcherOpen: true });
       return;
     }
+    try {
+      const { takeLaunchOpenPath, openWorkspaceFromOs } = await import(
+        "../lib/open-folder-boot"
+      );
+      const fromOs = await takeLaunchOpenPath();
+      if (fromOs) {
+        set({ loading: true, error: null });
+        await openWorkspaceFromOs(fromOs);
+        return;
+      }
+    } catch {
+      /* browser preview / command missing */
+    }
     const saved = readLastWorkspace();
     if (!saved) {
       set({ loading: false, root: null, launcherOpen: true });

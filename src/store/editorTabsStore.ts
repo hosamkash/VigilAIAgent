@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { browserTabTitle } from "../lib/browser-url";
+import {
+  ticketPlatformById,
+  type TicketPlatformId,
+} from "../lib/ticket-platforms";
 import { basename, languageFromPath } from "../lib/workspace-fs";
+import type { TicketsHubPane } from "./ticketPlatformStore";
 
 function browserTitle(url: string): string {
   return url ? browserTabTitle(url) : "Vigil Browser";
@@ -25,6 +30,15 @@ export interface BrowserTabMeta {
   url: string;
 }
 
+export interface TicketTabMeta {
+  ticketId: string;
+}
+
+export interface TicketsHubTabMeta {
+  platformId: TicketPlatformId;
+  pane: TicketsHubPane;
+}
+
 export interface EditorTab {
   id: string;
   path: string;
@@ -34,11 +48,13 @@ export interface EditorTab {
   original: string;
   dirty: boolean;
   pinned: boolean;
-  mode: "file" | "diff" | "extension" | "browser";
+  mode: "file" | "diff" | "extension" | "browser" | "ticket" | "tickets-hub";
   revealLine?: number;
   extension?: ExtensionTabMeta;
   gitDiff?: GitDiffMeta;
   browser?: BrowserTabMeta;
+  ticket?: TicketTabMeta;
+  ticketsHub?: TicketsHubTabMeta;
 }
 
 interface EditorTabsState {
@@ -55,7 +71,13 @@ interface EditorTabsState {
     revealLine?: number;
   }) => void;
   openExtension: (meta: ExtensionTabMeta) => void;
-  openBrowser: (url?: string) => void;
+  openBrowser: (
+    url?: string,
+    opts?: { reuse?: "any" | "none"; title?: string },
+  ) => void;
+  openTicketTab: (ticketId: string, title?: string) => void;
+  openTicketsHub: (platformId: TicketPlatformId, pane?: TicketsHubPane) => void;
+  updateTicketsHubPane: (id: string, pane: TicketsHubPane) => void;
   updateBrowserUrl: (id: string, url: string, title?: string) => void;
   closeTab: (id: string) => void;
   closeAll: () => void;
@@ -236,7 +258,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
   },
-  openBrowser: (url = "") => {
+  openBrowser: (url = "", opts) => {
     let normalized = url.trim();
     if (normalized) {
       // Keep store URL canonical so BrowserView always sees a real href.
@@ -255,8 +277,11 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     const tabs = get().tabs;
     const active = tabs.find((t) => t.id === get().activeId);
     const reuse =
-      (active?.mode === "browser" ? active : undefined) ??
-      tabs.find((t) => t.mode === "browser");
+      opts?.reuse === "none"
+        ? undefined
+        : (active?.mode === "browser" ? active : undefined) ??
+          tabs.find((t) => t.mode === "browser");
+    const tabTitle = opts?.title;
 
     if (reuse) {
       if (!normalized) {
@@ -270,7 +295,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
             ? {
                 ...t,
                 browser: { url: normalized },
-                title: browserTitle(normalized),
+                title: tabTitle || browserTitle(normalized),
                 path: `browser:${normalized}`,
               }
             : t,
@@ -283,7 +308,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     const tab: EditorTab = {
       id,
       path: normalized ? `browser:${normalized}` : `browser:${id}`,
-      title: normalized ? browserTitle(normalized) : "Vigil Browser",
+      title: tabTitle || (normalized ? browserTitle(normalized) : "Vigil Browser"),
       language: "plaintext",
       content: "",
       original: "",
@@ -294,6 +319,75 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
   },
+  openTicketTab: (ticketId, title) => {
+    const id = `ticket:${ticketId}`;
+    const label = (title || "Ticket").trim() || "Ticket";
+    const existing = get().tabs.find((t) => t.id === id);
+    if (existing) {
+      set((s) => ({
+        activeId: existing.id,
+        tabs: s.tabs.map((t) =>
+          t.id === id ? { ...t, title: label, ticket: { ticketId } } : t,
+        ),
+      }));
+      return;
+    }
+    const tab: EditorTab = {
+      id,
+      path: id,
+      title: label,
+      language: "plaintext",
+      content: "",
+      original: "",
+      dirty: false,
+      pinned: false,
+      mode: "ticket",
+      ticket: { ticketId },
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+  },
+  openTicketsHub: (platformId, pane = "overview") => {
+    const platform = ticketPlatformById(platformId);
+    const id = `tickets-hub:${platform.id}`;
+    const title = `Tickets · ${platform.label}`;
+    const existing = get().tabs.find((t) => t.id === id);
+    if (existing) {
+      set((s) => ({
+        activeId: existing.id,
+        tabs: s.tabs.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                title,
+                ticketsHub: { platformId: platform.id, pane },
+              }
+            : t,
+        ),
+      }));
+      return;
+    }
+    const tab: EditorTab = {
+      id,
+      path: id,
+      title,
+      language: "plaintext",
+      content: "",
+      original: "",
+      dirty: false,
+      pinned: false,
+      mode: "tickets-hub",
+      ticketsHub: { platformId: platform.id, pane },
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+  },
+  updateTicketsHubPane: (id, pane) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === id && t.mode === "tickets-hub" && t.ticketsHub
+          ? { ...t, ticketsHub: { ...t.ticketsHub, pane } }
+          : t,
+      ),
+    })),
   updateBrowserUrl: (id, url, title) =>
     set((s) => ({
       tabs: s.tabs.map((t) =>

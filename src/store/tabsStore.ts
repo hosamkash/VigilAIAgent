@@ -28,6 +28,8 @@ interface TabsState {
   hydrated: boolean;
   hydrateError: string | null;
   hydrate: () => Promise<void>;
+  /** Re-read VigilDB into tabs/history (after cloud pull). */
+  reloadFromDb: (keepTabs?: ChatTab[]) => Promise<void>;
   newTab: (title?: string) => string;
   setActive: (id: string) => void;
   renameTab: (id: string, title: string, custom?: boolean) => void;
@@ -103,6 +105,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   hydrate: async () => {
     if (get().hydrated) return;
     const before = get().tabs;
+    let cloudError: string | null = null;
     try {
       // Prefer VigilDB; migrate from SQLite once if VigilDB has no chats yet
       try {
@@ -121,27 +124,28 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         /* sqlite may be unavailable in browser preview */
       }
 
-      const docs = await listChatSessionDocs();
-      const open = docs.filter((d) => !d.archived).map(docToTab);
-      const history = docs.filter((d) => d.archived).map(docToTab);
-      // Keep tabs the user opened while hydrate was still loading.
-      const known = new Set(open.map((tab) => tab.id));
-      const liveExtra = get().tabs.filter((tab) => !known.has(tab.id));
-      const tabs = open.length > 0 ? [...open, ...liveExtra] : liveExtra.length > 0 ? liveExtra : [blankTab("Chat")];
-      const preferred =
-        get().activeTabId && tabs.some((tab) => tab.id === get().activeTabId)
-          ? get().activeTabId
-          : before.some((tab) => tabs.some((item) => item.id === tab.id))
-            ? before[before.length - 1]?.id ?? tabs[0]!.id
-            : tabs[0]!.id;
+      // Firestore-primary when signed in: pull cloud → VigilDB cache, then load UI.
+      try {
+        const { useCloudAuthStore } = await import("./cloudAuthStore");
+        const auth = useCloudAuthStore.getState();
+        const uid = auth.user?.uid;
+        if (auth.configured && uid) {
+          const { hydrateLocalChatsFromCloud } = await import(
+            "../lib/cloud/cloud-hydrate"
+          );
+          await hydrateLocalChatsFromCloud(uid);
+        }
+      } catch (err) {
+        cloudError = String(err);
+        /* offline / rules — fall through to local VigilDB */
+      }
 
-      set({
-        tabs,
-        activeTabId: preferred,
-        history,
-        hydrated: true,
-        hydrateError: null,
-      });
+      await get().reloadFromDb(before);
+      if (cloudError) {
+        set({
+          hydrateError: `Cloud sync skipped (using local cache): ${cloudError}`,
+        });
+      }
     } catch (err) {
       const tab = get().tabs[0] ?? blankTab("Chat");
       set({
@@ -151,6 +155,35 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         hydrateError: String(err),
       });
     }
+  },
+
+  reloadFromDb: async (keepTabs?: ChatTab[]) => {
+    const before = keepTabs ?? get().tabs;
+    const docs = await listChatSessionDocs();
+    const open = docs.filter((d) => !d.archived).map(docToTab);
+    const history = docs.filter((d) => d.archived).map(docToTab);
+    const known = new Set(open.map((tab) => tab.id));
+    const liveExtra = before.filter((tab) => !known.has(tab.id));
+    const tabs =
+      open.length > 0
+        ? [...open, ...liveExtra]
+        : liveExtra.length > 0
+          ? liveExtra
+          : [blankTab("Chat")];
+    const preferred =
+      get().activeTabId && tabs.some((tab) => tab.id === get().activeTabId)
+        ? get().activeTabId
+        : before.some((tab) => tabs.some((item) => item.id === tab.id))
+          ? before[before.length - 1]?.id ?? tabs[0]!.id
+          : tabs[0]!.id;
+
+    set({
+      tabs,
+      activeTabId: preferred,
+      history,
+      hydrated: true,
+      hydrateError: null,
+    });
   },
 
   newTab: (title) => {
@@ -173,10 +206,16 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
   renameTab: (id, title, custom = true) => {
     const next = title.trim().replace(/\s+/g, " ") || "Chat";
+    const updatedAt = Date.now();
     set((s) => ({
       tabs: s.tabs.map((t) =>
         t.id === id
-          ? { ...t, title: next, titleCustom: custom ? true : t.titleCustom }
+          ? {
+              ...t,
+              title: next,
+              titleCustom: custom ? true : t.titleCustom,
+              updatedAt,
+            }
           : t,
       ),
     }));
@@ -190,8 +229,20 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         draft: tab.draft,
         titleCustom: tab.titleCustom,
         createdAt: tab.createdAt,
-        updatedAt: Date.now(),
+        updatedAt,
       }).catch(() => undefined);
+      void (async () => {
+        try {
+          const { useCloudAuthStore } = await import("./cloudAuthStore");
+          const { pushChatToCloud } = await import("../lib/cloud/chats-sync");
+          const uid = useCloudAuthStore.getState().user?.uid;
+          if (uid) {
+            await pushChatToCloud({ ...tab, title: next, updatedAt }, uid);
+          }
+        } catch {
+          /* offline */
+        }
+      })();
     }
   },
 
@@ -213,6 +264,19 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       createdAt: item.createdAt,
       updatedAt,
     });
+    try {
+      const { useCloudAuthStore } = await import("./cloudAuthStore");
+      const { pushChatToCloud } = await import("../lib/cloud/chats-sync");
+      const uid = useCloudAuthStore.getState().user?.uid;
+      if (uid) {
+        await pushChatToCloud(
+          { ...item, title, archived: true, updatedAt },
+          uid,
+        );
+      }
+    } catch {
+      /* offline */
+    }
   },
 
   closeTab: async (id) => {
@@ -232,6 +296,20 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         });
       } catch {
         /* preview */
+      }
+      // Best-effort cloud mirror so web Recent sees archived state.
+      try {
+        const { useCloudAuthStore } = await import("./cloudAuthStore");
+        const { pushChatToCloud } = await import("../lib/cloud/chats-sync");
+        const uid = useCloudAuthStore.getState().user?.uid;
+        if (uid) {
+          await pushChatToCloud(
+            { ...tab, archived: true, updatedAt },
+            uid,
+          );
+        }
+      } catch {
+        /* offline */
       }
     }
     set((s) => {
@@ -294,11 +372,30 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   },
 
   deleteFromHistory: async (id) => {
+    const item =
+      get().history.find((h) => h.id === id) ||
+      get().tabs.find((t) => t.id === id);
     set((s) => ({ history: s.history.filter((h) => h.id !== id) }));
     try {
       await deleteChatSessionDoc(id);
     } catch {
       /* preview */
+    }
+    // Soft-archive in cloud (do not hard-delete account history remotely).
+    if (item) {
+      try {
+        const { useCloudAuthStore } = await import("./cloudAuthStore");
+        const { pushChatToCloud } = await import("../lib/cloud/chats-sync");
+        const uid = useCloudAuthStore.getState().user?.uid;
+        if (uid) {
+          await pushChatToCloud(
+            { ...item, archived: true, updatedAt: Date.now() },
+            uid,
+          );
+        }
+      } catch {
+        /* offline */
+      }
     }
   },
 
@@ -338,6 +435,15 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       });
     } catch {
       /* ignore in browser */
+    }
+    // Best-effort Firestore mirror when signed in (Cloud Bridge).
+    try {
+      const { useCloudAuthStore } = await import("./cloudAuthStore");
+      const { pushChatToCloud } = await import("../lib/cloud/chats-sync");
+      const uid = useCloudAuthStore.getState().user?.uid;
+      if (uid) await pushChatToCloud(tab, uid);
+    } catch {
+      /* offline / not configured — local save already succeeded */
     }
   },
 

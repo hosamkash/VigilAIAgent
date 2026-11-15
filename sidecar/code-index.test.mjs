@@ -11,6 +11,7 @@ import {
   clearMemory,
   loadCodeIndex,
   INDEX_VERSION,
+  importNeighbors,
 } from "./code-index.mjs";
 
 describe("chunkSource", () => {
@@ -64,6 +65,25 @@ describe("deep buildCodeIndex + search", () => {
     const result = searchCodeIndex(index, "findSymbol", 5);
     expect(result.mode).toBe("hybrid-bm25-vector");
     expect(result.hits[0].title).toBe("findSymbol");
+  });
+
+  it("returns 1-hop import neighbors", async () => {
+    const index = await buildCodeIndex(tmp);
+    const neighbors = importNeighbors(index, ["src/search.ts"]);
+    expect([...neighbors].some((p) => p.includes("rank"))).toBe(true);
+  });
+
+  it("skips gitignored generated folders", async () => {
+    await fs.writeFile(path.join(tmp, ".gitignore"), "generated/\n", "utf8");
+    await fs.mkdir(path.join(tmp, "generated"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmp, "generated", "skip.ts"),
+      `export const skipMe = true;\n`,
+      "utf8",
+    );
+    const index = await buildCodeIndex(tmp, { maxFiles: 50 });
+    const paths = Object.keys(index.files || {});
+    expect(paths.some((p) => p.includes("generated"))).toBe(false);
   });
 
   it("upserts a file and keeps hybrid search", async () => {

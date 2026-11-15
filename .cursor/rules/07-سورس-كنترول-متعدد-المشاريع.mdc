@@ -1,0 +1,351 @@
+---
+description: "07 سورس كنترول متعدد المشاريع (تابس ملونة)"
+alwaysApply: true
+---
+
+<!-- ===== فهرس عربي / اقرأني أول ===== -->
+**أولوية التنفيذ: 07** — سورس كنترول متعدد المشاريع (تابس ملونة)
+
+> **بالعربي (الغرض):** زي Cursor لما يكون عندك أكتر من ريبو، بس مش تحت بعض — كل مشروع تاب بعنوان ملون واضح عشان ماتضيعش.
+
+> **ملاحظة:** التفاصيل بالإنجليزي زي ما هي. سطر «عربي» فوق كل عنوان = ترجمة سريعة وأنت بتلف.
+
+**فهرس سريع:**
+- قصة المنتج للمستخدم
+- الواقع الحالي مقابل الفكرة
+- إجابات مقفولة
+- قسم — 3. Personas & jobs-to-be-done
+- رحلة المستخدم المثالية
+- واجهات الـ IDE (تابس ملونة)
+- موديل البيانات
+- اكتشاف الريبات
+- سلوك كل تاب (Changes / Graph / Branches)
+- تكامل مع باقي Vigil
+- أمان وحدود
+- مراحل التسليم
+- معايير القبول — امتى نخلص؟
+- قرارات لسه مفتوحة
+- صندوق الأفكار
+- حاجات مش في النطاق / خطوط حمراء
+- أماكن التنفيذ في الكود
+
+**ترتيب الملفات:** `00` عامة → `01` Plan Mode → `02` جسر سحابة → `03` ويب → `04` دعم/SQL → `05` EXE → `06` أمان → `07` سورس كنترول متعدد → `08` فتح من المستكشف
+<!-- ===== نهاية الفهرس العربي ===== -->
+
+# Vigil Multi-Repo Source Control — Colored Tabs Spec
+
+**What this file is:** the **product + UX contract** for Source Control when the user works on **more than one Git repository** at once — inspired by Cursor/VS Code multi-repo SCM, but **better**: **colored titled tabs** instead of a tall stacked list where repo headers get lost.  
+**Status:** EXECUTING — **Phase A+B ✅** (colored repo tabs + active-repo git cwd + persist + drafts). In-window project switcher **cancelled** — each workspace is its own Vigil window/instance.  
+**Related:**  
+- Current SCM UI: `src/components/layout/panels/ScmSidebar.tsx`, `scm-commands.ts`, `GitGraphView.tsx`  
+- Git ops: `src/lib/git.ts`, `src/lib/scm-view.ts`, `src/lib/scm-menu.ts`  
+- Workspace root today: `explorerStore.openWorkspace` → Tauri `set_workspace_cwd` (single root)  
+- Roadmap: `.cursor/rules/00-الخطة-العامة-والأولويات.mdc`  
+
+---
+
+> **عربي:** قصة المنتج للمستخدم
+
+## 0. Why this exists (product story)
+
+1. User often juggles **two (or more) repos** — e.g. `VigilAIAgent` (desktop) + `Vigil-AI-Agent-Web` (web) in one Cursor window.  
+2. Cursor/VS Code shows each repo as a **stacked block** under Source Control (Changes → repo A → repo B…).  
+3. With many changed files, the **repo title scrolls away** — easy to commit into the wrong project.  
+4. Vigil should show **one focused repo at a time**, via **tabs**: each tab = one Git root, with a **strong colored title** so identity never gets lost.  
+5. Commit / stage / push / graph / branches always apply to the **active tab’s repo only**.
+
+**Differentiator vs Cursor:** same multi-repo power, **clearer IA** — colored tabs > buried accordion headers.
+
+---
+
+> **عربي:** الواقع الحالي مقابل الفكرة
+
+## 1. Reality check — shipped vs missing
+
+> **عربي:** قسم — 1.1 Already in the repo
+
+### 1.1 Already in the repo (single workspace SCM)
+
+| Piece | Path | Notes |
+|-------|------|-------|
+| SCM sidebar | `ScmSidebar.tsx` | Changes / Graph / Branches tabs **inside one repo** |
+| Git commands | `git.ts`, `scm-commands.ts` | Operate against current workspace cwd |
+| Workspace | `explorerStore.openWorkspace` | **One** root via `set_workspace_cwd` |
+| Decorations | `gitDecorationStore` | Explorer file badges for one root |
+
+> **عربي:** قسم — 1.2 Missing (this spec)
+
+### 1.2 Missing
+
+- ✅ Register **multiple Git roots** in one Vigil window (workspace folders / opened repos)  
+- ✅ **Colored repo tabs** across the top of Source Control (not stacked lists)  
+- ✅ Per-repo status, commit box, graph, branch ops scoped to active tab  
+- ✅ Persist which repos are open + last active tab  
+- ✅ Clear empty / non-git folder handling   
+
+---
+
+> **عربي:** إجابات مقفولة
+
+## 2. Hard answers (locked for planning)
+
+| Question | Answer |
+|----------|--------|
+| Stack repos vertically like Cursor? | **No** — use **tabs** with **colored titles** |
+| Can one tab show two repos? | **No** — one Git root per tab |
+| Do agent tools / Explorer stay single-root for Phase 1? | **Yes by default** — primary workspace root remains the “coding” root; SCM can track **additional** Git roots. Open decision: whether Explorer becomes multi-root later (see §12) |
+| Commit into wrong repo? | Hard UI separation: active tab color + repo name always visible above Changes |
+| Nested git (submodule / monorepo subfolder)? | Phase 1: discover **top-level** `.git` per opened folder; submodule polish later |
+| Switch the whole IDE project from a combo inside one window? | **No — cancelled.** Each workspace opens in a **separate Vigil window / instance**. SCM colored tabs are only extra Git roots *inside* the current window (commits), not a project switcher. |
+
+---
+
+> **عربي:** قسم — 3. Personas & jobs-to-be-done
+
+## 3. Personas & jobs-to-be-done
+
+| Persona | Job |
+|---------|-----|
+| **Desktop + Web builder** | Commit desktop changes without mixing web repo files (and vice versa) |
+| **Support / multi-client** | Several customer repos open; switch SCM tab per customer |
+| **Heavy IDE user** | Always see **which** repo the commit box belongs to |
+
+---
+
+> **عربي:** رحلة المستخدم المثالية
+
+## 4. North-star user journeys
+
+> **عربي:** قسم — 4.1 Two products, one Vigil window
+
+### 4.1 Two products, one Vigil window
+
+1. User opens `VigilAIAgent` as workspace.  
+2. User **Add Git Repository…** (or Add Folder to Workspace) → picks `Vigil-AI-Agent-Web`.  
+3. Source Control shows two tabs: **VigilAIAgent** (color A) · **Vigil-AI-Agent-Web** (color B).  
+4. User selects Web tab → sees only web changes → commits on Web branch.  
+5. Switches to Desktop tab → desktop commit box / graph.  
+6. Titles stay **pinned / always visible** as tabs — never lost under a long file list.
+
+> **عربي:** قسم — 4.2 Quick glance
+
+### 4.2 Quick glance
+
+- Each tab shows dirty badge (count of changes) + optional branch name chip.  
+- Active tab = filled color bar / bold title; inactive = muted with same hue accent.
+
+---
+
+> **عربي:** واجهات الـ IDE (تابس ملونة)
+
+## 5. UX / IDE surfaces (dream)
+
+### 5.1 Source Control chrome (must)
+
+```text
+┌─ Source Control ─────────────────────────────┐
+│ [● VigilAIAgent] [● Vigil-AI-Agent-Web] [+] │  ← colored tabs
+│                                              │
+│  Branch: 05-Compleate-Phase5    ↻  ⋯         │  ← for ACTIVE tab only
+│  [ Commit message… ]              [Commit]   │
+│  ── Changes / Graph / Branches ──            │  ← existing inner tabs
+│  (file list for active repo only)            │
+└──────────────────────────────────────────────┘
+```
+
+- ✅ **Repo tabs row** above commit UI (always visible when SCM sidebar open)  
+- ✅ **Color per repo** — stable hash from repo path / id so color doesn’t jump across restarts  
+- ✅ Tab label = folder name (or `package.json` / remote name override later)  
+- ✅ Dirty indicator on tab (e.g. `•` or count)  
+- ✅ `+` to add another Git root; `×` on tab to remove from SCM list (does not delete disk)  
+- [ ] Context menu: Reveal in Finder, Copy path, Close, Set as primary workspace (optional)   
+
+### 5.2 Color rules
+
+- Palette of **distinct, high-contrast** hues (avoid purple-default AI look; fit Vigil light/dark tokens).  
+- Title text uses the tab color (or left color bar + colored name).  
+- Color is identity: same repo → same color next launch.  
+
+### 5.3 Empty / single repo
+
+- One Git root only → still show **one colored tab** (consistent chrome) OR hide tab strip until 2+ (prefer **always show tab** for clarity).  
+- Locked preference for planning: **always show the repo tab strip** even for one repo.
+
+---
+
+> **عربي:** موديل البيانات
+
+## 6. Data model (conceptual)
+
+```text
+ScmRepo {
+  id: string                 // stable (hash of absolute path)
+  rootPath: string           // absolute Git root
+  displayName: string        // folder basename or override
+  color: string              // CSS color token / hex from palette
+  branch?: string
+  ahead?: number
+  behind?: number
+  changeCount?: number
+  isPrimary?: boolean        // maps to explorer / agent cwd when true
+}
+
+ScmState {
+  repos: ScmRepo[]
+  activeRepoId: string | null
+}
+```
+
+Persist under local settings / `localStorage` `vigil.scm.repos.v1` (paths + UI state only — no secrets, no full file contents in cloud). Another workspace = another Vigil window, not an in-app session bag.
+
+---
+
+> **عربي:** اكتشاف الريبات
+
+## 7. Discovery & registration
+
+| Mode | Behavior |
+|------|----------|
+| Open folder | If folder is a Git root → register as SCM repo (current behavior + tab) |
+| Add repo | Dialog pick folder; require `.git` (or offer `git init`) |
+| Nested | Phase 1: only the folder user added; don’t auto-scan entire disk |
+| Multi-root workspace (later) | If Vigil gains multi-folder Explorer, each folder that is a Git root becomes a tab |
+
+---
+
+> **عربي:** سلوك كل تاب
+
+## 8. Per-tab behavior (must mirror today’s single-repo SCM)
+
+For the **active** repo only:
+
+- ✅ Fetch status / stage / unstage / commit / push / pull / sync  
+- ✅ Changes tree + Agent Review section if present  
+- ✅ Graph view  
+- ✅ Branches view  
+- ✅ AI commit message / review helpers use **that** repo’s diff  
+
+Switching tabs:
+
+- ✅ Cancel or ignore in-flight status for previous tab safely  
+- ✅ Restore scroll / draft commit message **per repo** (persist draft in memory or local)   
+
+---
+
+> **عربي:** تكامل مع باقي Vigil
+
+## 9. Integration with the rest of Vigil
+
+| Area | Rule |
+|------|------|
+| **Explorer / agent cwd** | Phase 1: primary workspace remains one path; optional “Set as primary” from SCM tab |
+| **StatusBar** | Show active SCM repo name + branch (colored dot) |
+| **Agent tools** | Still default to primary workspace; later: tool arg `repoId` / path when user @-mentions another root |
+| **Plan Mode** | Plans stay under primary `.vigil/plans/` unless plan hints name another root |
+| **Cloud Bridge** | Unrelated — do not upload repo contents |
+
+---
+
+> **عربي:** أمان وحدود
+
+## 10. Security & guardrails
+
+- ✅ Only paths the user explicitly opened/added  
+- ✅ Git commands always `cwd = activeRepo.rootPath` — never mix  
+- ✅ Confirm destructive ops with **repo displayName** in the dialog title  
+- ✅ No cross-repo `git add -A` by accident   
+
+---
+
+> **عربي:** مراحل التسليم
+
+## 11. Phased delivery (when execution starts)
+
+> **عربي:** قسم — Phase A — Tabs + status per repo
+
+### Phase A — Tabs + status per repo
+1. ✅ `scmReposStore` (or extend layout/git store): list of repos + active id + colors  
+2. ✅ Colored tab strip in `ScmSidebar`  
+3. ✅ All git ops take explicit `cwd` / root from active repo  
+4. ✅ Persist open repos + active tab  
+5. ✅ Tests: color stability, active scoping, no cross-repo stage  
+
+> **عربي:** قسم — Phase B — Polish
+
+### Phase B — Polish
+1. ✅ Per-repo commit draft memory  
+2. ✅ Dirty counts on tabs  
+3. ✅ StatusBar chip  
+4. ✅ Add / Close repo UX + empty states (AR/EN)   
+
+> **عربي:** قسم — Phase C — Deeper multi-root (optional)
+
+### Phase C — Deeper multi-root (optional)
+1. Multi-folder Explorer alignment  
+2. Agent `@repo` mention / tool cwd override  
+3. Submodule / nested git discovery  
+
+---
+
+> **عربي:** معايير القبول — امتى نخلص؟
+
+## 12. Acceptance criteria
+
+- ✅ User can open/add ≥2 Git repos and see **two colored tabs** in Source Control  
+- ✅ Changing files list / commit / graph always matches the **active tab only**  
+- ✅ Tab titles remain visible (not buried under a long Changes list)  
+- ✅ Closing a tab removes it from SCM without deleting the folder  
+- ✅ Restart restores tabs + colors + last active repo  
+- ✅ Impossible (by UI) to commit repo A’s message into repo B without switching tabs   
+
+---
+
+> **عربي:** قرارات لسه مفتوحة
+
+## 13. Open decisions
+
+- [ ] Whether Explorer becomes true multi-root in the same wave, or SCM-only multi-repo first (**recommend: SCM-only first**)  
+- [ ] Exact color palette (tie to theme tokens)  
+- [ ] Tab strip overflow when many repos (scroll vs overflow menu)  
+- [ ] Auto-detect sibling repos under a parent folder (off by default)  
+
+---
+
+> **عربي:** صندوق الأفكار
+
+## 14. Ideas inbox
+
+- 2026-11-13: User request — Cursor stacks VigilAIAgent + Vigil-AI-Agent-Web under Changes and titles get lost; Vigil should use **colored named tabs** instead of vertical stacking. Spec file created as `07`.  
+- 2026-11-13: **Phase A+B shipped** — `scmReposStore` + colored tabs + persist drafts/dirty + StatusBar chip.  
+- 2026-11-13: **In-window project switcher cancelled** — user: each project opens in a separate Vigil instance; no warm combo / session bag. 
+
+---
+
+> **عربي:** حاجات مش في النطاق / خطوط حمراء
+
+## 15. Non-goals / guardrails
+
+- Not cloning Cursor’s stacked multi-repo list as the primary UX  
+- Not a full VS Code multi-root workspace clone in Phase A  
+- Not uploading any repo to Firestore  
+- Not merging two repos’ Changes into one list  
+- **Not** an in-window project switcher / warm combo — another workspace = another Vigil window  
+
+---
+
+> **عربي:** أماكن التنفيذ في الكود
+
+## 16. Implementation touchpoints (when coding)
+
+| Area | Files / places |
+|------|----------------|
+| SCM UI | `src/components/layout/panels/ScmSidebar.tsx` |
+| Commands | `src/components/layout/panels/scm-commands.ts` |
+| Git API | `src/lib/git.ts` — ensure every op accepts explicit `cwd` |
+| View helpers | `src/lib/scm-view.ts`, `scm-menu.ts` |
+| State | new `src/store/scmReposStore.ts` (or similar) |
+| Workspace | `explorerStore` / Tauri `set_workspace_cwd` — one primary workspace per window |
+| StatusBar | `src/components/layout/StatusBar.tsx` |
+| Tests | `src/lib/git.test.ts` + new scm multi-repo tests |
+
+After each slice: update checkboxes here **and** `00-الخطة-العامة-والأولويات.mdc`; run `npm test` (+ focused tsc when UI/TS changed).

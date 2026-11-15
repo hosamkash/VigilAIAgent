@@ -503,6 +503,7 @@ export function RunSidebar() {
           </div>,
           document.body,
         )}
+
       <div className="mb-2 flex items-center justify-between gap-2 pr-12">
         <div className="text-[11px] font-semibold uppercase text-[var(--vigil-muted)]">
           Run and Debug

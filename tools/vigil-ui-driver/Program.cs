@@ -1,8 +1,11 @@
 using System.Diagnostics;
+using System.Drawing.Imaging;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Capturing;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
@@ -61,12 +64,26 @@ internal static class Program
 
     private static object Handle(string op, JsonElement root) => op.ToLowerInvariant() switch
     {
-        "ping" => new { ok = true, output = "pong", attached = _app != null },
+        "ping" => new
+        {
+            ok = true,
+            output = "pong",
+            attached = _app != null,
+            pid = _app?.ProcessId,
+            title = SafeName(TryMainWindow()),
+        },
         "launch" => Launch(root),
         "attach" => Attach(root),
         "snapshot" => Snapshot(root),
+        "search" => Search(root),
+        "screenshot" => Screenshot(root),
         "click" => Click(root),
         "type" => Type(root),
+        "select" => Select(root),
+        "keys" => Keys(root),
+        "windows" => ListWindows(),
+        "focus_window" => FocusWindow(root),
+        "screen_map" => ScreenMap(root),
         "read" => Read(root),
         "wait" => Wait(root),
         "close" => CloseApp(),
@@ -82,9 +99,25 @@ internal static class Program
         Cleanup();
         _automation = new UIA3Automation();
         var args = GetString(root, "args") ?? "";
-        _app = string.IsNullOrWhiteSpace(args)
-            ? Application.Launch(path)
-            : Application.Launch(path, args);
+        var cwd = GetString(root, "cwd") ?? GetString(root, "workingDirectory");
+
+        if (!string.IsNullOrWhiteSpace(cwd) && Directory.Exists(cwd))
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = path,
+                Arguments = args,
+                WorkingDirectory = cwd,
+                UseShellExecute = false,
+            };
+            _app = Application.Launch(psi);
+        }
+        else
+        {
+            _app = string.IsNullOrWhiteSpace(args)
+                ? Application.Launch(path)
+                : Application.Launch(path, args);
+        }
 
         // Give WinForms / DevExpress a moment to create the main window.
         Thread.Sleep(800);
@@ -99,6 +132,7 @@ internal static class Program
             output = $"Launched {path} (pid={_app.ProcessId})",
             pid = _app.ProcessId,
             title = SafeName(win),
+            path,
         };
     }
 
@@ -117,13 +151,38 @@ internal static class Program
             if (string.IsNullOrWhiteSpace(name))
                 return new { ok = false, error = "attach requires pid or name" };
 
-            var proc = Process.GetProcesses()
-                .FirstOrDefault(p =>
-                    p.ProcessName.Equals(name, StringComparison.OrdinalIgnoreCase)
-                    || (p.MainWindowTitle?.Contains(name, StringComparison.OrdinalIgnoreCase) ?? false));
-            if (proc == null)
+            var matches = Process.GetProcesses()
+                .Where(p =>
+                {
+                    try
+                    {
+                        return p.ProcessName.Equals(name, StringComparison.OrdinalIgnoreCase)
+                            || (p.MainWindowTitle?.Contains(name, StringComparison.OrdinalIgnoreCase) ?? false);
+                    }
+                    catch { return false; }
+                })
+                .GroupBy(p => p.Id)
+                .Select(g => g.First())
+                .ToList();
+
+            if (matches.Count == 0)
                 return new { ok = false, error = $"No process matching '{name}'" };
-            _app = Application.Attach(proc);
+            if (matches.Count > 1)
+            {
+                var candidates = matches.Select(p =>
+                {
+                    string title = "";
+                    try { title = p.MainWindowTitle ?? ""; } catch { /* */ }
+                    return new { pid = p.Id, processName = p.ProcessName, title };
+                }).ToList();
+                return new
+                {
+                    ok = false,
+                    error = $"Multiple processes match '{name}'. Pass pid from candidates.",
+                    candidates,
+                };
+            }
+            _app = Application.Attach(matches[0]);
         }
 
         var win = TryMainWindow();
@@ -380,6 +439,450 @@ internal static class Program
         return new { ok = false, error = $"Timeout after {ms}ms waiting for '{nameContains}{autoId}'" };
     }
 
+    private static object Search(JsonElement root)
+    {
+        EnsureApp();
+        var queryRaw = GetString(root, "query") ?? GetString(root, "q") ?? "";
+        var query = NormalizeSearch(queryRaw);
+        if (string.IsNullOrWhiteSpace(query))
+            return new { ok = false, error = "search requires query" };
+
+        var max = root.TryGetProperty("max", out var maxEl) && maxEl.TryGetInt32(out var m) ? m : 40;
+        max = Math.Clamp(max, 1, 100);
+
+        Refs.Clear();
+        var win = RequireWindow();
+        win.SetForeground();
+
+        var lines = new List<string>
+        {
+            $"- Search \"{Truncate(queryRaw.Trim(), 60)}\" (normalized match)",
+            $"- Window: {SafeName(win)}",
+        };
+        var count = 0;
+
+        Walk(win, 0, 12, el =>
+        {
+            if (count >= max) return false;
+            string name;
+            string autoId;
+            string help;
+            ControlType ct;
+            bool offscreen;
+            try
+            {
+                name = (el.Name ?? "").Trim();
+                autoId = (el.AutomationId ?? "").Trim();
+                help = (el.HelpText ?? "").Trim();
+                ct = el.ControlType;
+                offscreen = el.IsOffscreen;
+            }
+            catch { return true; }
+
+            if (offscreen) return true;
+
+            var hay = NormalizeSearch($"{name} {autoId} {help} {ct}");
+            if (!hay.Contains(query, StringComparison.Ordinal)) return true;
+
+            count++;
+            var refId = $"e{count}";
+            Refs[refId] = el;
+            var bits = new List<string> { $"[{refId}]", ct.ToString() };
+            if (!string.IsNullOrEmpty(name)) bits.Add($"\"{Truncate(name, 60)}\"");
+            if (!string.IsNullOrEmpty(autoId)) bits.Add($"id={autoId}");
+            lines.Add("  - " + string.Join(" ", bits));
+            return true;
+        });
+
+        if (count == 0)
+            lines.Add("  (no matches)");
+
+        return new { ok = true, output = string.Join("\n", lines), count };
+    }
+
+    private static object Screenshot(JsonElement root)
+    {
+        EnsureApp();
+        var win = RequireWindow();
+        win.SetForeground();
+        Thread.Sleep(120);
+
+        using var capture = Capture.Element(win);
+        using var ms = new MemoryStream();
+        capture.Bitmap.Save(ms, ImageFormat.Png);
+        var bytes = ms.ToArray();
+        var b64 = Convert.ToBase64String(bytes);
+        var title = SafeName(win);
+        return new
+        {
+            ok = true,
+            output = $"Screenshot {capture.Bitmap.Width}x{capture.Bitmap.Height} of \"{Truncate(title, 80)}\" ({bytes.Length} bytes). Image sent to IDE.",
+            imageBase64 = b64,
+            width = capture.Bitmap.Width,
+            height = capture.Bitmap.Height,
+            title,
+            pid = _app!.ProcessId,
+        };
+    }
+
+    private static object Select(JsonElement root)
+    {
+        EnsureApp();
+        var el = ResolveRef(root);
+        var value = GetString(root, "value") ?? GetString(root, "text") ?? "";
+        if (string.IsNullOrWhiteSpace(value))
+            return new { ok = false, error = "select requires value" };
+
+        el.Focus();
+        Thread.Sleep(80);
+
+        try
+        {
+            if (el.Patterns.Value.IsSupported)
+            {
+                el.Patterns.Value.Pattern.SetValue(value);
+                return new { ok = true, output = $"Selected/set value \"{Truncate(value, 60)}\" on {GetString(root, "ref")}" };
+            }
+        }
+        catch { /* fall through */ }
+
+        // Expand combo then pick matching ListItem / MenuItem.
+        try
+        {
+            if (el.Patterns.ExpandCollapse.IsSupported)
+                el.Patterns.ExpandCollapse.Pattern.Expand();
+            else
+                el.Click();
+            Thread.Sleep(200);
+        }
+        catch
+        {
+            try { el.Click(); } catch { /* */ }
+            Thread.Sleep(200);
+        }
+
+        AutomationElement? hit = null;
+        var needle = NormalizeSearch(value);
+        Walk(RequireWindow(), 0, 10, child =>
+        {
+            if (hit != null) return false;
+            try
+            {
+                var ct = child.ControlType;
+                if (ct is not (ControlType.ListItem or ControlType.MenuItem or ControlType.DataItem or ControlType.Text))
+                    return true;
+                var n = child.Name ?? "";
+                if (NormalizeSearch(n).Contains(needle, StringComparison.Ordinal))
+                {
+                    hit = child;
+                    return false;
+                }
+            }
+            catch { /* */ }
+            return true;
+        });
+
+        if (hit == null)
+            return new { ok = false, error = $"No list item matching '{value}'" };
+
+        try
+        {
+            if (hit.Patterns.SelectionItem.IsSupported)
+                hit.Patterns.SelectionItem.Pattern.Select();
+            else if (hit.Patterns.Invoke.IsSupported)
+                hit.Patterns.Invoke.Pattern.Invoke();
+            else
+                hit.Click();
+        }
+        catch
+        {
+            hit.Click();
+        }
+
+        Thread.Sleep(150);
+        return new { ok = true, output = $"Selected \"{Truncate(SafeName(hit), 60)}\" for {GetString(root, "ref")}" };
+    }
+
+    private static object Keys(JsonElement root)
+    {
+        EnsureApp();
+        var keys = GetString(root, "keys") ?? GetString(root, "text") ?? "";
+        if (string.IsNullOrWhiteSpace(keys))
+            return new { ok = false, error = "keys required (e.g. Ctrl+S, Alt+F, Enter)" };
+
+        var win = TryMainWindow();
+        win?.SetForeground();
+        Thread.Sleep(60);
+
+        var parts = keys.Split('+', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1)
+        {
+            TypeKeyToken(parts[0]);
+        }
+        else
+        {
+            var mods = new List<VirtualKeyShort>();
+            VirtualKeyShort? main = null;
+            foreach (var part in parts)
+            {
+                var vk = ParseKeyToken(part);
+                if (vk is VirtualKeyShort.CONTROL or VirtualKeyShort.MENU or VirtualKeyShort.SHIFT or VirtualKeyShort.LWIN)
+                    mods.Add(vk.Value);
+                else
+                    main = vk;
+            }
+            if (main == null)
+                return new { ok = false, error = $"Could not parse keys '{keys}'" };
+            if (mods.Count == 0)
+                Keyboard.Type(main.Value);
+            else
+            {
+                var chord = mods.Append(main.Value).ToArray();
+                Keyboard.TypeSimultaneously(chord);
+            }
+        }
+
+        Thread.Sleep(120);
+        return new { ok = true, output = $"Pressed {keys}" };
+    }
+
+    private static object ListWindows()
+    {
+        EnsureApp();
+        if (_automation == null || _app == null)
+            return new { ok = false, error = "No app attached" };
+
+        Window[] wins;
+        try { wins = _app.GetAllTopLevelWindows(_automation); }
+        catch (Exception ex) { return new { ok = false, error = ex.Message }; }
+
+        var lines = new List<string> { $"- Windows for pid={_app.ProcessId} ({wins.Length})" };
+        for (var i = 0; i < wins.Length; i++)
+        {
+            var title = SafeName(wins[i]);
+            lines.Add($"  [{i}] \"{Truncate(title, 80)}\"");
+        }
+        return new
+        {
+            ok = true,
+            output = string.Join("\n", lines),
+            count = wins.Length,
+            windows = wins.Select((w, i) => new { index = i, title = SafeName(w) }).ToList(),
+        };
+    }
+
+    private static object FocusWindow(JsonElement root)
+    {
+        EnsureApp();
+        if (_automation == null || _app == null)
+            return new { ok = false, error = "No app attached" };
+
+        Window[] wins;
+        try { wins = _app.GetAllTopLevelWindows(_automation); }
+        catch (Exception ex) { return new { ok = false, error = ex.Message }; }
+
+        Window? target = null;
+        if (root.TryGetProperty("index", out var idxEl) && idxEl.TryGetInt32(out var idx))
+        {
+            if (idx < 0 || idx >= wins.Length)
+                return new { ok = false, error = $"index {idx} out of range (0..{wins.Length - 1})" };
+            target = wins[idx];
+        }
+        else
+        {
+            var title = GetString(root, "title") ?? GetString(root, "name") ?? "";
+            if (string.IsNullOrWhiteSpace(title))
+                return new { ok = false, error = "focus_window requires index or title" };
+            target = wins.FirstOrDefault(w =>
+                SafeName(w).Contains(title, StringComparison.OrdinalIgnoreCase));
+            if (target == null)
+                return new { ok = false, error = $"No window title containing '{title}'" };
+        }
+
+        target.SetForeground();
+        Thread.Sleep(100);
+        return new { ok = true, output = $"Focused \"{Truncate(SafeName(target), 80)}\"", title = SafeName(target) };
+    }
+
+    private static object ScreenMap(JsonElement root)
+    {
+        EnsureApp();
+        var maxMenus = root.TryGetProperty("maxMenus", out var mm) && mm.TryGetInt32(out var n)
+            ? Math.Clamp(n, 1, 30)
+            : 12;
+        var maxItems = root.TryGetProperty("maxItems", out var mi) && mi.TryGetInt32(out var ni)
+            ? Math.Clamp(ni, 5, 80)
+            : 40;
+        var timeoutMs = root.TryGetProperty("timeoutMs", out var tm) && tm.TryGetInt32(out var t)
+            ? Math.Clamp(t, 5_000, 120_000)
+            : 60_000;
+
+        var win = RequireWindow();
+        win.SetForeground();
+        var sw = Stopwatch.StartNew();
+        var paths = new List<string>();
+        var skipNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "exit", "quit", "close", "خروج", "إغلاق", "اغلاق", "إنهاء", "انهاء",
+        };
+
+        // Collect top-level menu items (MenuBar / Menu).
+        var topMenus = new List<AutomationElement>();
+        Walk(win, 0, 4, el =>
+        {
+            if (topMenus.Count >= maxMenus) return false;
+            try
+            {
+                if (el.ControlType == ControlType.MenuItem)
+                {
+                    // Prefer items that look top-level: parent is MenuBar or Menu or Pane.
+                    var parent = el.Parent;
+                    var pct = parent?.ControlType;
+                    if (pct is ControlType.MenuBar or ControlType.Menu or ControlType.ToolBar or ControlType.Pane)
+                    {
+                        var name = SafeName(el);
+                        if (!string.IsNullOrEmpty(name) && !skipNames.Contains(name))
+                            topMenus.Add(el);
+                    }
+                }
+            }
+            catch { /* */ }
+            return true;
+        });
+
+        // De-dupe by name
+        topMenus = topMenus
+            .GroupBy(SafeName)
+            .Select(g => g.First())
+            .Take(maxMenus)
+            .ToList();
+
+        foreach (var menu in topMenus)
+        {
+            if (sw.ElapsedMilliseconds > timeoutMs) break;
+            var menuName = SafeName(menu);
+            if (string.IsNullOrEmpty(menuName)) continue;
+
+            try
+            {
+                menu.Focus();
+                if (menu.Patterns.ExpandCollapse.IsSupported)
+                    menu.Patterns.ExpandCollapse.Pattern.Expand();
+                else
+                    menu.Click();
+                Thread.Sleep(250);
+            }
+            catch
+            {
+                try { menu.Click(); Thread.Sleep(250); }
+                catch { continue; }
+            }
+
+            var itemCount = 0;
+            Walk(win, 0, 8, el =>
+            {
+                if (sw.ElapsedMilliseconds > timeoutMs) return false;
+                if (itemCount >= maxItems) return false;
+                try
+                {
+                    if (el.ControlType != ControlType.MenuItem) return true;
+                    var childName = SafeName(el);
+                    if (string.IsNullOrEmpty(childName)) return true;
+                    if (string.Equals(childName, menuName, StringComparison.OrdinalIgnoreCase)) return true;
+                    if (skipNames.Contains(childName)) return true;
+                    paths.Add($"{menuName} → {childName}");
+                    itemCount++;
+                }
+                catch { /* */ }
+                return true;
+            });
+
+            // Collapse / Escape
+            try
+            {
+                if (menu.Patterns.ExpandCollapse.IsSupported)
+                    menu.Patterns.ExpandCollapse.Pattern.Collapse();
+                else
+                    Keyboard.Type(VirtualKeyShort.ESCAPE);
+            }
+            catch
+            {
+                try { Keyboard.Type(VirtualKeyShort.ESCAPE); } catch { /* */ }
+            }
+            Thread.Sleep(120);
+        }
+
+        var lines = new List<string>
+        {
+            $"- Screen map pid={_app!.ProcessId}",
+            $"- Window: {SafeName(win)}",
+            $"- Top menus scanned: {topMenus.Count}",
+            $"- Menu paths: {paths.Count}",
+        };
+        foreach (var p in paths.Take(120))
+            lines.Add($"  - {p}");
+        if (paths.Count == 0)
+            lines.Add("  (no menu paths found — try app_snapshot / app_search_ui)");
+
+        return new
+        {
+            ok = true,
+            output = string.Join("\n", lines),
+            menuCount = topMenus.Count,
+            pathCount = paths.Count,
+            paths,
+        };
+    }
+
+    private static VirtualKeyShort? ParseKeyToken(string token)
+    {
+        var t = token.Trim();
+        if (t.Length == 0) return null;
+        return t.ToLowerInvariant() switch
+        {
+            "ctrl" or "control" => VirtualKeyShort.CONTROL,
+            "alt" or "menu" => VirtualKeyShort.MENU,
+            "shift" => VirtualKeyShort.SHIFT,
+            "win" or "meta" or "cmd" => VirtualKeyShort.LWIN,
+            "enter" or "return" => VirtualKeyShort.ENTER,
+            "esc" or "escape" => VirtualKeyShort.ESCAPE,
+            "tab" => VirtualKeyShort.TAB,
+            "space" => VirtualKeyShort.SPACE,
+            "backspace" or "bksp" => VirtualKeyShort.BACK,
+            "delete" or "del" => VirtualKeyShort.DELETE,
+            "up" => VirtualKeyShort.UP,
+            "down" => VirtualKeyShort.DOWN,
+            "left" => VirtualKeyShort.LEFT,
+            "right" => VirtualKeyShort.RIGHT,
+            "f1" => VirtualKeyShort.F1,
+            "f2" => VirtualKeyShort.F2,
+            "f3" => VirtualKeyShort.F3,
+            "f4" => VirtualKeyShort.F4,
+            "f5" => VirtualKeyShort.F5,
+            "f6" => VirtualKeyShort.F6,
+            "f7" => VirtualKeyShort.F7,
+            "f8" => VirtualKeyShort.F8,
+            "f9" => VirtualKeyShort.F9,
+            "f10" => VirtualKeyShort.F10,
+            "f11" => VirtualKeyShort.F11,
+            "f12" => VirtualKeyShort.F12,
+            _ when t.Length == 1 && char.IsLetterOrDigit(t[0]) =>
+                (VirtualKeyShort)char.ToUpperInvariant(t[0]),
+            _ => null,
+        };
+    }
+
+    private static void TypeKeyToken(string token)
+    {
+        var vk = ParseKeyToken(token);
+        if (vk != null)
+        {
+            Keyboard.Type(vk.Value);
+            return;
+        }
+        Keyboard.Type(token);
+    }
+
     private static object CloseApp()
     {
         try
@@ -392,6 +895,28 @@ internal static class Program
         }
         Cleanup();
         return new { ok = true, output = "Application closed." };
+    }
+
+    /// <summary>Arabic-friendly normalize: Alef variants, taa marbuta, alif maqsura, strip marks.</summary>
+    private static string NormalizeSearch(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var sb = new StringBuilder(s.Length);
+        foreach (var ch in s.Normalize(NormalizationForm.FormKD))
+        {
+            var cat = CharUnicodeInfo.GetUnicodeCategory(ch);
+            if (cat is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark)
+                continue;
+            var c = ch switch
+            {
+                'أ' or 'إ' or 'آ' or 'ٱ' => 'ا',
+                'ة' => 'ه',
+                'ى' => 'ي',
+                _ => char.ToLowerInvariant(ch),
+            };
+            sb.Append(c);
+        }
+        return sb.ToString().Trim();
     }
 
     private static AutomationElement ResolveRef(JsonElement root)

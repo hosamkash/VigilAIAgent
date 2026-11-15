@@ -12,11 +12,17 @@ import {
   Undo2,
 } from "lucide-react";
 import { useExplorerStore } from "../../../store/explorerStore";
+import { getActiveScmRepo, useScmReposStore } from "../../../store/scmReposStore";
 import { useLayoutStore } from "../../../store/layoutStore";
 import { useEditorTabsStore } from "../../../store/editorTabsStore";
 import { useCostStore } from "../../../store/costStore";
 import { useTerminalStore } from "../../../store/terminalStore";
 import { useGitDecorationStore } from "../../../store/gitDecorationStore";
+import { useChatStore } from "../../../store/chatStore";
+import {
+  buildCiFixPrompt,
+  type CiStatusSummary,
+} from "../../../lib/git-pr";
 import { readTextFile, writeTextFile } from "../../../lib/workspace-fs";
 import {
   assertGitOk,
@@ -63,6 +69,7 @@ import {
 } from "../../../lib/git-ai";
 import { GitGraphView } from "./GitGraphView";
 import { ScmOverflowMenu, ScmPromptDialog, type ScmPromptRequest } from "./ScmMenu";
+import { ScmRepoTabs } from "./ScmRepoTabs";
 import { runScmCommand } from "./scm-commands";
 import { useSpeechDictation } from "../../../lib/hooks/useSpeechDictation";
 import { useNativeLiveDictation } from "../../../lib/hooks/useNativeLiveDictation";
@@ -147,6 +154,7 @@ function ChangeRow({
   onToggle: () => void;
   label?: string;
 }) {
+  const repoLabel = getActiveScmRepo()?.displayName;
   const openFile = useEditorTabsStore((s) => s.openFile);
   const showGitDiff = useEditorTabsStore((s) => s.showGitDiff);
   const abs = `${root.replace(/\/$/, "")}/${change.path}`;
@@ -231,12 +239,20 @@ function ChangeRow({
           danger
           onClick={() => {
             if (change.status === "?") {
-              if (window.confirm(`Delete untracked file ${change.path}?`)) {
+              if (
+              window.confirm(
+                `Delete untracked file ${change.path}${repoLabel ? ` in ${repoLabel}` : ""}?`,
+              )
+            ) {
                 void gitCleanFile(root, change.path).then(onRefresh);
               }
               return;
             }
-            if (window.confirm(`Discard changes to ${change.path}?`)) {
+            if (
+              window.confirm(
+                `Discard changes to ${change.path}${repoLabel ? ` in ${repoLabel}` : ""}?`,
+              )
+            ) {
               void gitDiscard(root, change.path).then(onRefresh);
             }
           }}
@@ -249,7 +265,13 @@ function ChangeRow({
 }
 
 export function ScmSidebar() {
-  const root = useExplorerStore((s) => s.root);
+  const workspaceRoot = useExplorerStore((s) => s.root);
+  const extraRoots = useExplorerStore((s) => s.extraRoots);
+  const scmRepos = useScmReposStore((s) => s.repos);
+  const activeRepoId = useScmReposStore((s) => s.activeRepoId);
+  const activeScm = scmRepos.find((r) => r.id === activeRepoId) || scmRepos[0];
+  const root = activeScm?.rootPath || workspaceRoot;
+  const repoLabel = activeScm?.displayName || "repository";
   const showAgentDiff = useEditorTabsStore((s) => s.showAgentDiff);
   const showGitDiff = useEditorTabsStore((s) => s.showGitDiff);
   const recordEstimate = useCostStore((s) => s.recordEstimate);
@@ -288,6 +310,7 @@ export function ScmSidebar() {
   const [aiBusy, setAiBusy] = useState(false);
   const [review, setReview] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
+  const [lastCi, setLastCi] = useState<CiStatusSummary | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimer = useRef<number | null>(null);
 
@@ -311,14 +334,40 @@ export function ScmSidebar() {
   const promptResolve = useRef<((value: string | null) => void) | null>(null);
 
   const noCommits = !!(status && !status.hasCommits);
+  const refreshGen = useRef(0);
+
+  useEffect(() => {
+    useScmReposStore.getState().syncFromWorkspace(workspaceRoot, extraRoots);
+  }, [workspaceRoot, extraRoots]);
+
+  useEffect(() => {
+    const draft =
+      useScmReposStore
+        .getState()
+        .repos.find((r) => r.id === activeRepoId)?.commitDraft ?? "";
+    setMessage(draft);
+  }, [activeRepoId]);
 
   const refresh = useCallback(async () => {
     if (!root) return;
+    const gen = ++refreshGen.current;
     setBusy(true);
     try {
       const st = await fetchGitStatus(root);
+      if (gen !== refreshGen.current) return;
       setStatus(st);
       setUiError(null);
+      if (activeRepoId) {
+        const changeCount =
+          st.staged.length +
+          st.changes.length +
+          st.untracked.length +
+          st.conflicted.length;
+        useScmReposStore.getState().patchRepo(activeRepoId, {
+          changeCount,
+          branch: st.branch,
+        });
+      }
       if (st.hasCommits) {
         const [br, gr, inn, out] = await Promise.all([
           gitListBranches(root),
@@ -342,11 +391,12 @@ export function ScmSidebar() {
       }
       void useGitDecorationStore.getState().refresh();
     } catch (err) {
+      if (gen !== refreshGen.current) return;
       setLog(String(err));
     } finally {
-      setBusy(false);
+      if (gen === refreshGen.current) setBusy(false);
     }
-  }, [root]);
+  }, [root, activeRepoId]);
 
   useEffect(() => {
     void refresh();
@@ -445,6 +495,7 @@ export function ScmSidebar() {
       setSortBy,
       ask,
       attempt: withProgress,
+      onCiSummary: setLastCi,
     });
   }
 
@@ -459,6 +510,9 @@ export function ScmSidebar() {
     });
     if (result.ok) {
       setMessage("");
+      if (activeRepoId) {
+        useScmReposStore.getState().setCommitDraft(activeRepoId, "");
+      }
       setCommitMenuOpen(false);
     }
   }
@@ -475,6 +529,9 @@ export function ScmSidebar() {
     });
     if (!committed.ok) return;
     setMessage("");
+    if (activeRepoId) {
+      useScmReposStore.getState().setCommitDraft(activeRepoId, "");
+    }
     await refresh();
     runCommand("push");
   }
@@ -726,18 +783,27 @@ export function ScmSidebar() {
   if (status && !status.isRepo) {
     return (
       <div className="flex h-full flex-col p-3">
+        <ScmRepoTabs />
         <ScmToolbar
           busy={busy}
           onRefresh={() => void refresh()}
           onMore={(el) => openMenu("more", el)}
         />
         <p className="mb-3 text-xs text-[var(--vigil-muted)]">
-          This folder is not a Git repository.
+          {repoLabel} is not a Git repository.
         </p>
         <button
           type="button"
           className="rounded bg-[var(--vigil-accent)] px-2 py-1 text-xs text-white"
-          onClick={() => void gitInit(root).then(refresh)}
+          onClick={() => {
+            if (
+              window.confirm(
+                `Initialize a Git repository in ${repoLabel}?`,
+              )
+            ) {
+              void gitInit(root).then(refresh);
+            }
+          }}
         >
           Initialize Repository
         </button>
@@ -791,6 +857,7 @@ export function ScmSidebar() {
 
   return (
     <div className="flex h-full flex-col p-2">
+      <ScmRepoTabs />
       <ScmToolbar
         busy={busy}
         onRefresh={() => void refresh()}
@@ -826,6 +893,15 @@ export function ScmSidebar() {
       )}
 
       <div className="mb-2 flex items-center gap-1 text-[11px]">
+        {activeScm ? (
+          <span
+            className="max-w-[7rem] truncate font-semibold"
+            style={{ color: activeScm.color }}
+            title={activeScm.rootPath}
+          >
+            {repoLabel}
+          </span>
+        ) : null}
         <button
           type="button"
           disabled={!!noCommits || !!progress}
@@ -863,7 +939,52 @@ export function ScmSidebar() {
           <ExternalLink className="h-3 w-3" />
           <span>PR</span>
         </button>
+        <button
+          type="button"
+          disabled={!!noCommits || !!progress || !status?.branch}
+          title="Push current branch and watch CI"
+          className="flex shrink-0 items-center rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[10px] text-[var(--vigil-muted)] hover:bg-[var(--vigil-hover)] hover:text-[var(--vigil-text)] disabled:opacity-40"
+          onClick={() => runCommand("pushWatchCi")}
+        >
+          CI
+        </button>
       </div>
+      {lastCi ? (
+        <div className="mb-2 rounded border border-[var(--vigil-border)] px-2 py-1.5 text-[10px]">
+          <div className="flex items-center justify-between gap-2">
+            <span>
+              CI: <strong>{lastCi.state}</strong>
+              {lastCi.prNumber ? ` · #${lastCi.prNumber}` : ""}
+            </span>
+            {lastCi.state === "failure" ? (
+              <button
+                type="button"
+                className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5 hover:bg-[var(--vigil-hover)]"
+                onClick={() =>
+                  useChatStore.getState().queueAgentPrompt(buildCiFixPrompt(lastCi))
+                }
+              >
+                Fix in chat
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="rounded border border-[var(--vigil-border)] px-1.5 py-0.5 hover:bg-[var(--vigil-hover)]"
+                onClick={() => runCommand("checkCiStatus")}
+              >
+                Refresh
+              </button>
+            )}
+          </div>
+          <ul className="mt-1 max-h-24 overflow-auto text-[var(--vigil-muted)]">
+            {lastCi.checks.slice(0, 8).map((c) => (
+              <li key={c.name}>
+                {c.name}: {c.conclusion || c.status}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {status?.upstream && (incoming.length > 0 || outgoing.length > 0) && (
         <details className="mb-2 text-[10px]">
           <summary className="cursor-pointer text-[var(--vigil-muted)]">
@@ -879,7 +1000,13 @@ export function ScmSidebar() {
         <div className="mb-1 flex gap-1">
           <textarea
             value={message}
-            onChange={(e) => setMessage(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setMessage(v);
+              if (activeRepoId) {
+                useScmReposStore.getState().setCommitDraft(activeRepoId, v);
+              }
+            }}
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                 e.preventDefault();
